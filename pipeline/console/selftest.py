@@ -123,7 +123,31 @@ def main():
         W.write_status(board, 0, 0, 1, now)
         srows = board.read(B.STATUS)
         check("오늘 현황에 한 줄로 갱신", len(srows) == 1 and srows[0]["결과"].startswith("올림 0"), srows)
+        W.set_status(board, "코드 반영", "반영 aaaaaaa → bbbbbbb", "", now)
+        W.set_status(board, "코드 반영", "실패: console 자체 시험", "되돌림", now)
+        srows = board.read(B.STATUS)
+        check("오늘 현황: 다른 항목은 다른 줄, 같은 항목은 갱신", len(srows) == 2 and srows[1]["항목"] == "코드 반영" and srows[1]["결과"].startswith("실패") and srows[0]["항목"] == "게시 일꾼", srows)
         con.close()
+
+    class FakeApi(Exception):
+        pass
+    try:
+        try:
+            raise FakeApi("APIError: [403]: Google Sheets API has not been used in project 1 before or it is disabled.")
+        except FakeApi as inner:
+            raise PermissionError from inner
+    except PermissionError as e:
+        m1 = B.explain_sheet_error(e)
+    m2 = B.explain_sheet_error(PermissionError())
+    m3 = B.explain_sheet_error(FileNotFoundError(2, "No such file", "/x/sa.json"))
+    m4 = B.explain_sheet_error(FakeApi("APIError: [404]: Requested entity was not found."))
+    check("시트 오류를 원인 한 줄로", "Sheets API" in m1 and "공유" in m2 and "키 파일" in m3 and "CONSOLE_SHEET_ID" in m4, (m1, m2, m3, m4))
+    try:
+        B.open_board({"GOOGLE_SERVICE_ACCOUNT_FILE": "/nonexistent/sa.json", "CONSOLE_SHEET_ID": "x"})
+        stopped = ""
+    except SystemExit as e:
+        stopped = str(e)
+    check("시트를 못 열면 긴 오류 대신 [중단] 한 줄", stopped.startswith("[중단] 조종판 시트를 열 수 없습니다"), stopped)
 
     print("\n시험 %d건 중 %d건 통과" % (len(ok), sum(ok)))
     return 0 if all(ok) else 1

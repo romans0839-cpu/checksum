@@ -1,0 +1,3 @@
+# 서버(리눅스)에서 도는 스크립트는 LF, PC에서 더블클릭하는 것은 CRLF
+*.sh  text eol=lf
+*.bat text eol=crlf

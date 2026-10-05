@@ -4,6 +4,7 @@
 """
 import csv
 import os
+import re
 
 QUEUE, CANDIDATES, STATUS = "게시 대기열", "후보", "오늘 현황"
 HEADERS = {
@@ -124,4 +125,29 @@ def open_board(env):
     key, sid = env.get("GOOGLE_SERVICE_ACCOUNT_FILE"), env.get("CONSOLE_SHEET_ID")
     if not (key and sid):
         raise SystemExit("[중단] .env 에 GOOGLE_SERVICE_ACCOUNT_FILE 과 CONSOLE_SHEET_ID 가 필요합니다 (docs/15 §6).")
-    return GSheetBoard(key, sid)
+    try:
+        return GSheetBoard(key, sid)
+    except Exception as e:   # 긴 오류 대신 원인 한 줄
+        raise SystemExit("[중단] 조종판 시트를 열 수 없습니다: " + explain_sheet_error(e))
+
+
+def explain_sheet_error(e):
+    """시트를 열다 난 오류를 한 줄 원인으로 바꾼다. 키 파일 내용은 문구에 넣지 않는다."""
+    parts, cur = [], e
+    while cur is not None and len(parts) < 4:
+        parts.append("%s %s" % (type(cur).__name__, cur))
+        cur = cur.__cause__ or cur.__context__
+    text = " | ".join(parts)
+    if isinstance(e, ModuleNotFoundError) or "No module named" in text:
+        return "gspread 가 깔려 있지 않습니다 (pip install -r requirements-server.txt)."
+    if isinstance(e, FileNotFoundError):
+        return "서비스 계정 키 파일이 없습니다. .env 의 GOOGLE_SERVICE_ACCOUNT_FILE 경로를 확인하세요."
+    if "has not been used" in text or "is disabled" in text:
+        return "구글 클라우드 프로젝트에서 Google Sheets API 가 꺼져 있습니다. 콘솔의 'API 및 서비스'에서 사용 설정한 뒤 1~2분 뒤에 다시 실행하세요."
+    if "[404]" in text or "SpreadsheetNotFound" in text or "not found" in text.lower():
+        return "시트를 찾지 못했습니다. .env 의 CONSOLE_SHEET_ID 를 확인하세요."
+    if isinstance(e, PermissionError) or "[403]" in text or "PERMISSION_DENIED" in text:
+        return "권한이 없습니다. 시트의 '공유'에 서비스 계정 이메일이 편집자로 들어 있는지 확인하세요."
+    if "invalid_grant" in text or "JSONDecodeError" in text or "MalformedError" in text:
+        return "서비스 계정 키 파일을 읽을 수 없습니다(파일이 깨졌거나 폐기된 키). 키를 다시 내려받아 두세요."
+    return "%s (%s)" % (type(e).__name__, re.sub(r"\s+", " ", str(e))[:200] or "설명 없음")

@@ -4,6 +4,7 @@
     python -m pipeline.console.worker run                     한 바퀴 돈다 (서버에서 5분마다)
     python -m pipeline.console.worker run --dry-run           올리지 않고 무엇을 할지만 보여 준다
     python -m pipeline.console.worker add --channel 스레드 --at "2026-10-09 06:30" --text "..." [--reply "..."]
+    python -m pipeline.console.worker note --item "코드 반영" --result "..."     '오늘 현황'에 한 줄 (서버 작업용)
 
 규칙
 - 상태가 '승인'이고 예약 시각이 지난 줄만 올린다. '초안'·'보류'는 건드리지 않는다. 사람이 승인하지 않은 글은 올라가지 않는다.
@@ -151,15 +152,19 @@ def run_once(board, env, now=None, dry_run=False, posters=None, con=None, log=pr
     return posted, blocked, waiting
 
 
-def write_status(board, posted, blocked, waiting, now):
-    stamp = now.astimezone(KST).strftime("%Y-%m-%d %H:%M")
-    rows = board.read(B.STATUS)
-    line = {"항목": "게시 일꾼", "마지막 실행(KST)": stamp, "결과": "올림 %d / 막힘 %d / 예약 대기 %d" % (posted, blocked, waiting), "메모": ""}
-    hit = [r for r in rows if r.get("항목") == "게시 일꾼"]
+def set_status(board, item, result, memo="", now=None):
+    """'오늘 현황' 탭에 항목 한 줄. 같은 항목이 있으면 그 줄을 갱신한다."""
+    now = now or datetime.now(timezone.utc)
+    line = {"항목": item, "마지막 실행(KST)": now.astimezone(KST).strftime("%Y-%m-%d %H:%M"), "결과": result, "메모": memo}
+    hit = [r for r in board.read(B.STATUS) if r.get("항목") == item]
     if hit:
         board.update(B.STATUS, hit[0]["_row"], line)
     else:
         board.append(B.STATUS, [line])
+
+
+def write_status(board, posted, blocked, waiting, now):
+    set_status(board, "게시 일꾼", "올림 %d / 막힘 %d / 예약 대기 %d" % (posted, blocked, waiting), "", now)
 
 
 def main(argv=None):
@@ -176,6 +181,10 @@ def main(argv=None):
     a.add_argument("--text", required=True)
     a.add_argument("--reply", default="")
     a.add_argument("--note", default="")
+    n = sub.add_parser("note", help="'오늘 현황'에 한 줄 적기 (서버 작업이 결과를 남길 때)")
+    n.add_argument("--item", required=True)
+    n.add_argument("--result", required=True)
+    n.add_argument("--memo", default="")
     args = ap.parse_args(argv)
     env = envmod.load()
     board = B.open_board(env)
@@ -187,6 +196,10 @@ def main(argv=None):
     if args.cmd == "add":
         no, problems = add_draft(board, args.channel, args.at, args.text, args.reply, args.note)
         print("초안 %s번을 넣었습니다. 검사: %s" % (no, "이상 없음" if not problems else "; ".join(problems)))
+        return 0
+    if args.cmd == "note":
+        set_status(board, args.item, args.result[:300], args.memo[:300])
+        print("오늘 현황에 적었습니다: %s" % args.item)
         return 0
     now = datetime.now(timezone.utc)
     con = None if args.dry_run else store.connect(args.db)
