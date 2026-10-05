@@ -30,7 +30,7 @@ v0.1(10/5 대화에서 제안) → v0.2: 자체 검토에서 9건을 고쳤다(�
 | 사실 | fact | LLM이 볼 수 있는 유일한 재료. 코드가 만든 한 줄 문장 + 근거 + 발행 가능 여부 |
 | 판정 | judgment, score | 규칙이 내린 상태 판정과 13주 뒤 채점. 장부 번호와 연결 |
 | 발행 | issue, issue_sentence, correction | 호별 초안·최종본, 문장별 등급과 근거, 정정 기록 |
-| 말투 | edit_log, phrase_log | 검수에서 고친 문장, 이미 쓴 인사·감정 표현 |
+| 말투 | edit_log, phrase_log, sns_edit | 검수에서 고친 문장, 이미 쓴 인사·감정 표현. SNS는 조종판에서 고쳐 승인한 문장(sns_edit, docs/15 §5-4) |
 | 엔진 예측 | engine_version, forecast_target, forecast, forecast_score | 엔진 버전, 대상 지표, 봉인된 예측과 채점(D18, docs/12). 원문의 기준은 장부이고 이 표는 조회용 사본 |
 | 운영 | job, job_run, meta | 작업 일정과 실행 결과 |
 

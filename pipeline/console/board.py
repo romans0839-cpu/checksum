@@ -6,11 +6,12 @@ import csv
 import os
 import re
 
-QUEUE, CANDIDATES, STATUS = "게시 대기열", "후보", "오늘 현황"
+QUEUE, CANDIDATES, STATUS, EDITS = "게시 대기열", "후보", "오늘 현황", "고친 기록"
 HEADERS = {
     QUEUE: ["번호", "예약(KST)", "채널", "본문", "셀프 답글", "상태", "검사", "게시 링크", "게시 시각", "처음 문안", "메모"],
     CANDIDATES: ["날짜", "번호", "제목", "무슨 일", "경제와 닿는 지점", "가설 1", "가설 2", "가설 3", "반대로 볼 점", "더 볼 것", "선택"],
     STATUS: ["항목", "마지막 실행(KST)", "결과", "메모"],
+    EDITS: ["본 시각(KST)", "번호", "초안", "채널", "종류", "처음", "고친 뒤"],   # 서버가 통째로 다시 쓰는 탭. 사람이 고치지 않는다
 }
 ST_DRAFT, ST_OK, ST_POSTING, ST_DONE, ST_HOLD, ST_BLOCKED = "초안", "승인", "게시 중", "게시됨", "보류", "막힘"
 STATES = [ST_DRAFT, ST_OK, ST_POSTING, ST_DONE, ST_HOLD, ST_BLOCKED]
@@ -54,6 +55,12 @@ class CsvBoard:
 
     def append(self, tab, new_rows):
         self._write(tab, self.read(tab) + list(new_rows))
+
+    def replace(self, tab, rows):
+        """탭의 내용을 통째로 바꾼다(머리글은 그대로). 서버만 쓰는 탭에만 쓴다."""
+        if tab in (QUEUE, CANDIDATES):
+            raise ValueError("사람이 고치는 탭은 통째로 바꾸지 않는다: " + tab)
+        self._write(tab, list(rows))
 
 
 class GSheetBoard:
@@ -121,6 +128,14 @@ class GSheetBoard:
         rows = [[r.get(k, "") for k in HEADERS[tab]] for r in new_rows]
         if rows:
             self._tab(tab).append_rows(rows, value_input_option="RAW")
+
+    def replace(self, tab, rows):
+        """탭의 내용을 통째로 바꾼다(머리글 포함). 서버만 쓰는 탭에만 쓴다 — 게시 대기열에는 쓰지 않는다."""
+        if tab in (QUEUE, CANDIDATES):
+            raise ValueError("사람이 고치는 탭은 통째로 바꾸지 않는다: " + tab)
+        ws = self._tab(tab)
+        ws.clear()
+        ws.update(values=[HEADERS[tab]] + [[r.get(k, "") for k in HEADERS[tab]] for r in rows], range_name="A1", value_input_option="RAW")
 
 
 def open_board(env):

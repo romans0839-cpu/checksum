@@ -15,6 +15,7 @@ from ..publish import threads as threads_api
 from ..publish import x as x_api
 from . import board as B
 from . import drafts as D
+from . import edits as E
 from . import jobs as J
 from . import worker as W
 
@@ -158,7 +159,8 @@ def main():
                 "drafts": os.path.join(tmp, "no_drafts", "*.md")}
         t0 = datetime(2099, 1, 14, 13, 32, tzinfo=timezone.utc)   # 발표 2분 뒤
         jlog = []
-        kw = dict(board_opener=lambda: board, log=jlog.append)
+        only_collect = [j for j in J.JOBS if j.id == "collect_indicators"]
+        kw = dict(board_opener=lambda: board, log=jlog.append, jobs=only_collect)
 
         ids = [s.id for s in J.indicator_slots(t0, opts)]
         check("예정: 매일 아침 + 수집기가 있는 발표 직후만", "release:CPI:2098-12" in ids and not any("CLAIMS" in i or "GDP" in i for i in ids)
@@ -216,7 +218,7 @@ def main():
         def no_board():
             raise SystemExit("[중단] 조종판 시트를 열 수 없습니다: 권한")
         jlog.clear()
-        ran = J.tick(now=t1, opts=dict(opts, db=os.path.join(tmp, "j4.db"), collect=broken), board_opener=no_board, log=jlog.append)
+        ran = J.tick(now=t1, opts=dict(opts, db=os.path.join(tmp, "j4.db"), collect=broken), board_opener=no_board, log=jlog.append, jobs=only_collect)
         check("작업이 멈추거나 조종판을 못 열어도 일꾼은 끝까지 돌고 기록을 남김", len(ran) == 1 and not ran[0][2]["ok"] and "도중에 멈춤" in ran[0][2]["result"]
               and any("조종판에 적지 못함" in x for x in jlog), (ran, jlog))
         tue = datetime(2099, 1, 1, 14, 30, tzinfo=timezone.utc)   # 한국 시간 23:30
@@ -356,6 +358,52 @@ X용 짧은 글
         st = {r["항목"]: r for r in board.read(B.STATUS)}["초안 싣기"]
         check("형식이 틀린 파일만 있어도 한 번은 알리고, 같은 문제를 되풀이해 알리지 않음", len(first) == 1 and st["결과"].startswith("주의 1건") and "예약 시각 형식" in st["메모"]
               and J.tick(now=t1 + timedelta(minutes=40), opts=ob, jobs=only, board_opener=lambda: board, log=jlog.append) == [], (first, st))
+
+    # --- 고친 기록: 승인·게시된 줄에서 고친 문장만 모아 탭에 적는다
+    d = E.diff("첫 문장입니다. 둘째 문장입니다.\n\n셋째 줄\n전월비 [채울 것: CPI 전월비]%", "첫 문장입니다. 둘째 문장을 고쳤습니다.\n\n전월비 0.3%\n새로 넣은 줄")
+    check("고친 곳만 문장 단위로: 바꿈·지움·채움·더함", d == [(E.KIND_CHANGE, "둘째 문장입니다.", "둘째 문장을 고쳤습니다."), (E.KIND_DELETE, "셋째 줄", ""),
+                                             (E.KIND_FILL, "전월비 [채울 것: CPI 전월비]%", "전월비 0.3%"), (E.KIND_ADD, "", "새로 넣은 줄")], d)
+    d2 = E.diff("스레드를 시작한 지 일주일이 됐습니다.\n\n[채울 것: 이번 주에 해 본 것 한 가지]\n\n다음 주에 첫 호를 보냅니다.",
+                "글을 올린 지 일주일입니다.\n\n서버에서 지표를 받아 보았습니다.\n\n다음 주에 첫 호를 보냅니다.")
+    check("통째로 채운 칸도 그 자리의 문장과 짝이 됨", (E.KIND_FILL, "[채울 것: 이번 주에 해 본 것 한 가지]", "서버에서 지표를 받아 보았습니다.") in d2
+          and (E.KIND_CHANGE, "스레드를 시작한 지 일주일이 됐습니다.", "글을 올린 지 일주일입니다.") in d2 and len(d2) == 2, d2)
+    check("고치지 않은 글은 기록이 없음", E.diff("같은 글.\n둘째 줄", "같은 글.\r\n둘째 줄 ") == [])
+    with tempfile.TemporaryDirectory() as tmp:
+        board = B.CsvBoard(os.path.join(tmp, "board"))
+        for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
+            board.ensure(tab)
+        bn = W.banned_terms()
+        W.add_drafts(board, [{"channel": B.CH_THREADS, "slot": "", "text": "숫자가 어떻게 나올지는 모릅니다. 나오면 그대로 적겠습니다.", "note": "a-1 · 일정"},
+                             {"channel": B.CH_X, "slot": "", "text": "고쳤지만 아직 승인하지 않은 글입니다.", "note": "a-2 · 일정"},
+                             {"channel": B.CH_THREADS, "slot": "", "text": "손대지 않고 승인한 글입니다.", "note": "a-3 · 일정"}], bn)
+        q = board.read(B.QUEUE)
+        board.update(B.QUEUE, q[0]["_row"], {"본문": "숫자는 저도 모릅니다. 나오면 그대로 적겠습니다.", "상태": B.ST_OK})
+        board.update(B.QUEUE, q[1]["_row"], {"본문": "고치는 중입니다."})
+        board.update(B.QUEUE, q[2]["_row"], {"상태": B.ST_OK})
+        only = [j for j in J.JOBS if j.id == "log_edits"]
+        opts = {"db": os.path.join(tmp, "e.db")}
+        t0 = datetime(2099, 1, 5, 3, 7, tzinfo=timezone.utc)
+        jlog = []
+        ran = J.tick(now=t0, opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append)
+        tab = board.read(B.EDITS)
+        st = {r["항목"]: r for r in board.read(B.STATUS)}.get("고친 기록", {})
+        check("고친 기록: 승인한 줄의 고친 문장만 탭에", len(ran) == 1 and len(tab) == 1 and tab[0]["종류"] == E.KIND_CHANGE and tab[0]["처음"] == "숫자가 어떻게 나올지는 모릅니다."
+              and tab[0]["고친 뒤"] == "숫자는 저도 모릅니다." and tab[0]["초안"] == "a-1" and st.get("결과", "").startswith("새로 고친 문장 1개"), (ran, tab, st))
+        n_log = len(jlog)
+        again = J.tick(now=t0 + timedelta(minutes=5), opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append)
+        nxt = J.tick(now=t0 + timedelta(hours=1), opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append)
+        check("같은 시간에는 한 번만, 새로 고친 것이 없으면 조용히 지나감", again == [] and len(nxt) == 1 and nxt[0][2]["quiet"] and len(jlog) == n_log
+              and {r["항목"]: r for r in board.read(B.STATUS)}["고친 기록"]["마지막 실행(KST)"] == "2099-01-05 12:07", (again, nxt, jlog[n_log:]))
+        board.update(B.QUEUE, q[1]["_row"], {"상태": B.ST_DONE})
+        J.tick(now=t0 + timedelta(hours=2), opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append)
+        tab = board.read(B.EDITS)
+        check("새 고침은 맨 위에, 긴 칸은 잘라서", len(tab) == 2 and tab[0]["초안"] == "a-2" and tab[1]["초안"] == "a-1" and E._cut("가" * 500).endswith("…") and len(E._cut("가" * 500)) == E.CELL_MAX, tab)
+        try:
+            board.replace(B.QUEUE, [])
+            guarded = False
+        except ValueError:
+            guarded = True
+        check("게시 대기열은 통째로 바꿀 수 없음", guarded and len(board.read(B.QUEUE)) == 3)
 
     class FakeApi(Exception):
         pass

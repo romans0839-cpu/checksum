@@ -290,6 +290,17 @@ CREATE INDEX IF NOT EXISTS ix_trend ON trend(geo, first_seen_at);
 
 -- 13. SNS 게시 기록 (조종판, D23, docs/15) --------------------------------------
 -- 올라간 글마다 한 줄. 처음 문안과 올린 문안을 함께 남겨 말투 기준으로 쓴다.
+CREATE TABLE IF NOT EXISTS sns_edit (      -- 조종판에서 고친 SNS 문장(승인·게시된 줄만). 다음 초안의 말투 기준이 된다 (pipeline/console/edits.py)
+  edit_id   INTEGER PRIMARY KEY,
+  board_no  TEXT,                -- 조종판의 번호
+  draft     TEXT NOT NULL DEFAULT '',   -- 초안 이름(메모 칸의 첫 마디)
+  channel   TEXT NOT NULL,       -- 스레드, X
+  kind      TEXT NOT NULL,       -- 바꿈 / 지움 / 더함 / 채움
+  before    TEXT NOT NULL,       -- 처음 문안의 문장 (더함이면 빈칸)
+  after     TEXT NOT NULL,       -- 고친 뒤의 문장 (지움이면 빈칸)
+  seen_at   TEXT NOT NULL,       -- UTC. 서버가 처음 본 시각
+  UNIQUE (channel, draft, kind, before, after)
+);
 CREATE TABLE IF NOT EXISTS sns_post (
   post_id       INTEGER PRIMARY KEY,
   board_no      TEXT,                -- 조종판의 번호

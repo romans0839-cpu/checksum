@@ -17,6 +17,7 @@
 지금 있는 작업
 - collect_indicators (지표 수집): 매일 07:10 + 노동통계국 발표 2분 뒤. 발표 직후에는 발표값이 올 때까지 10분마다 다시 받는다.
 - load_drafts (초안 싣기): 저장소에 새 SNS 초안(data/sns/drafts/*.md)이 올라오면 조종판 게시 대기열에 '초안'으로 싣는다. 승인은 사람만 한다.
+- log_edits (고친 기록): 한 시간에 한 번, 승인·게시된 줄에서 Nick이 고친 문장을 모아 '고친 기록' 탭에 적는다. 새로 고친 것이 없으면 아무것도 적지 않는다.
 """
 import argparse
 import csv
@@ -34,6 +35,7 @@ from ..collect import store
 from ..forecast import targets as T
 from . import board as B
 from . import drafts as D
+from . import edits as E
 from . import worker as W
 
 KST = timezone(timedelta(hours=9))
@@ -191,8 +193,39 @@ def run_drafts(now, due, opts):
     return {"ok": True, "result": "%s초안 %d줄을 대기열에 실음" % (head, count), "memo": memo, "done": {s.id for s in due}, "lines": []}
 
 
+# --- 고친 기록: 조종판에서 고친 문장 -> '고친 기록' 탭 (말투의 기준)
+
+def edit_slots(now, opts):
+    """한 시간에 한 번(매시 7분). 놓치면 그 시간 안에만 다시 한다."""
+    hour = now.replace(minute=0, second=0, microsecond=0)
+    out = []
+    for i in (-1, 0, 1):
+        at = hour + timedelta(hours=i, minutes=7)
+        out.append(Slot("edits:" + at.strftime("%Y-%m-%dT%H"), at, at + timedelta(minutes=50), 20, 2, "고친 문장 모으기", None))
+    return out
+
+
+def run_edits(now, due, opts):
+    con = store.connect(opts.get("db") or store.DEFAULT_DB)
+    try:
+        board = opts["board_opener"]()
+        new = E.record(con, board.read(B.QUEUE), now)
+        first = store.get_meta(con, "edits_tab") is None
+        if new or first:   # 탭은 새 고침이 있을 때와 맨 처음에만 다시 쓴다
+            board.replace(B.EDITS, E.latest(con))
+            store.set_meta(con, "edits_tab", now.strftime(UTC_FMT))
+            con.commit()
+        count = E.total(con)
+    finally:
+        con.close()
+    result = "새로 고친 문장 %d개 (모두 %d개)" % (new, count) if new else "'고친 기록' 탭을 만들었습니다 (고친 문장 %d개)" % count
+    return {"ok": True, "result": result, "memo": ["승인·게시된 줄에서 고친 문장만 모읍니다. 최근 것부터 '고친 기록' 탭에 있습니다"], "done": {s.id for s in due}, "lines": [],
+            "quiet": not (new or first)}
+
+
 JOBS = [Job("collect_indicators", "지표 수집", indicator_slots, run_indicators),
-        Job("load_drafts", "초안 싣기", draft_slots, run_drafts)]
+        Job("load_drafts", "초안 싣기", draft_slots, run_drafts),
+        Job("log_edits", "고친 기록", edit_slots, run_edits)]
 
 
 # --- 일꾼
@@ -290,6 +323,8 @@ def run_job(job, due, now, opts, db_path, board_opener, log):
             memo.append(nxt)
     except Exception as e:
         memo.append("[주의] 실행 기록을 남기지 못함 (%s: %s). 다음 바퀴에 다시 돌 수 있음" % (type(e).__name__, str(e)[:120]))
+    if res.get("quiet"):   # 할 일이 없었던 바퀴: 기록만 남기고 로그와 조종판은 건드리지 않는다
+        return res
     for line in res.get("lines") or []:
         log("   " + line)
     log("%s %s: %s%s" % (now.astimezone(KST).strftime("%Y-%m-%d %H:%M"), job.item, res["result"], " | " + " / ".join(memo) if memo else ""))
@@ -349,6 +384,9 @@ def main(argv=None):
     if a.cmd == "plan":
         for job in JOBS:
             print("%s (%s)" % (job.item, job.id))
+            if job.id == "log_edits":
+                print("   매시 7분  고친 문장 모으기")
+                continue
             for s in job.slots(now, {}):
                 if now <= s.at < now + timedelta(days=PLAN_DAYS):
                     print("   %s  %s" % (kst_text(s.at), s.label))
