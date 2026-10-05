@@ -145,7 +145,8 @@ X용 문안: 스레드 글의 첫 두세 줄을 X 길이에 맞춘 짧은 판으
 - 예약 시각이 비어 있는 초안(예비 글)은 승인하는 즉시 올라간다.
 - 형식이 틀린 초안 파일은 통째로 싣지 않고 "오늘 현황"의 "초안 싣기" 줄에 이유를 적는다.
 - 올리기 전에 세션이 돌리는 검사: `python -m pipeline.console.drafts check data/sns/drafts/<파일>.md` (길이·금지어·본문 링크·형식). 금지어 목록에 없는 표현(가격 방향, 권유)은 이 검사가 잡지 못한다. 그 선은 쓰는 쪽과 승인하는 사람이 지킨다.
-- 파일 형식은 `pipeline/console/drafts.py` 머리말에 있다. 첫 파일: `data/sns/drafts/2026-10-09_first_two_weeks.md`(스레드 첫 2주치).
+- 파일 형식은 `pipeline/console/drafts.py` 머리말에 있다. 지금 파일: `data/sns/drafts/2026-10-09_two_weeks_v2.md`(스레드 첫 2주치, D27 방향으로 다시 쓴 판. 첫 판 `…first_two_weeks.md`는 10/6 전부 기각되어 저장소에서 지웠다 — 시트에 이미 실린 46줄은 Nick이 지운다).
+- `drafts check`는 `templates/avoid_terms.txt`의 말(예: 봉인)이 본문이나 답글에 있으면 걸러 낸다(D27). 서버는 이것으로 글을 막지 않는다.
 
 ## 5-4. 고친 문장이 다음 초안으로 돌아가는 길 — "고친 기록" 탭 (10/6)
 

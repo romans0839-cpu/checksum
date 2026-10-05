@@ -309,6 +309,14 @@ X용 짧은 글
     check("초안 파일 읽기: 예약·줄기·조건, 본문의 빈 줄 보존, 채널별 칸", not bad and len(drafts) == 2 and drafts[0]["threads"] == "첫 글입니다.\n\n둘째 문단."
           and drafts[0]["reply"].startswith("구독") and drafts[0]["x"] == "X용 짧은 글" and drafts[0]["cond"] == "" and drafts[1]["cond"] == "발표가 나온 뒤" and drafts[1]["slot"] == "", (bad, drafts))
     with tempfile.TemporaryDirectory() as tmp:
+        terms_file = os.path.join(tmp, "avoid.txt")
+        with open(terms_file, "w", encoding="utf-8") as f:
+            f.write("# 설명 줄\n봉인\n\n")
+        terms = D.avoid_terms(terms_file)
+        check("쓰지 않는 말: 목록에 있는 말이 든 글만 걸리고, 목록 파일이 없으면 걸지 않는다",
+              terms == ["봉인"] and D.avoid_hits("답은 발표 전에 봉인했습니다.", terms) == ["봉인"] and D.avoid_hits("답은 발표 전에 저장해 두었습니다.", terms) == []
+              and D.avoid_terms(os.path.join(tmp, "none.txt")) == [], terms)
+    with tempfile.TemporaryDirectory() as tmp:
         board = B.CsvBoard(os.path.join(tmp, "board"))
         for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
             board.ensure(tab)

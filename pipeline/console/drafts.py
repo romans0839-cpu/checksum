@@ -1,6 +1,6 @@
 """SNS 초안 파일: 저장소에 올린 초안(data/sns/drafts/*.md)을 조종판 게시 대기열에 '초안'으로 싣는다 (docs/15 §5-3).
 
-    python -m pipeline.console.drafts check data/sns/drafts/<파일>.md    올리기 전 검사: 길이·금지어·본문 링크·채우지 않은 칸
+    python -m pipeline.console.drafts check data/sns/drafts/<파일>.md    올리기 전 검사: 길이·금지어·본문 링크·채우지 않은 칸·쓰지 않는 말
     python -m pipeline.console.drafts pending                            아직 싣지 않은 초안 (서버)
 
 - 세션(또는 예약 작업)이 초안 파일을 저장소에 올리면, 서버의 예약 작업 일꾼이 5분 안에 대기열에 '초안'으로 적는다.
@@ -26,6 +26,8 @@
     X용 짧은 판 (한글 약 140자)
 
 - 나중에 채워야 하는 값은 [채울 것: 무엇] 으로 적는다. 채우지 않고 승인하면 게시 일꾼이 막는다.
+- 독자가 알아듣지 못하는 우리끼리의 말(templates/avoid_terms.txt, 예: 봉인)이 본문에 있으면 check 가 걸러 낸다(D27).
+  이 검사는 초안을 쓰는 쪽을 위한 것이라 check 명령에서만 한다. 서버는 이것으로 글을 막지 않는다 — 고쳐 쓰는 것은 사람의 몫이다.
 """
 import argparse
 import glob
@@ -43,6 +45,21 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SECTIONS = {"스레드": "threads", "스레드 답글": "reply", "X": "x"}
 META = {"예약": "slot", "줄기": "stem", "조건": "cond", "메모": "memo"}
 START = "<!-- 초안 시작 -->"
+AVOID_FILE = os.path.join(store.ROOT, "templates", "avoid_terms.txt")
+
+
+def avoid_terms(path=None):
+    """발행 문장에 쓰지 않는 말의 목록. 파일이 없으면 빈 목록."""
+    try:
+        with open(path or AVOID_FILE, encoding="utf-8-sig") as f:
+            return [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    except OSError:
+        return []
+
+
+def avoid_hits(text, terms):
+    """글에 들어 있는 '쓰지 않는 말'."""
+    return [t for t in terms if t in (text or "")]
 
 
 def parse(text):
@@ -173,6 +190,7 @@ def main(argv=None):
         print("아직 싣지 않은 줄 %d개" % len(items))
         return 0
     banned, bad = W.banned_terms(), 0
+    avoid = avoid_terms()
     for path in a.files:
         with open(path, encoding="utf-8-sig") as f:
             drafts, problems = parse(f.read())
@@ -185,6 +203,9 @@ def main(argv=None):
                 found = W.check_text(it["channel"], it["text"], it["reply"], banned)
                 todo = [p for p in found if p.startswith("채우지 않은 칸")]
                 real = [p for p in found if p not in todo]
+                hits = avoid_hits(it["text"] + "\n" + it["reply"], avoid)
+                if hits:
+                    real.append("쓰지 않는 말: " + ", ".join(hits) + " (풀어서 쓴다)")
                 size = "%d자" % len(it["text"]) if it["channel"] == B.CH_THREADS else "가중 %d/%d" % (x_api.weighted_length(it["text"]), x_api.MAX_WEIGHT)
                 print("%s %-18s %-4s %-12s %s%s" % ("**걸림" if real else "  통과", d["id"], it["channel"], size, d["slot"] or "(예약 없음)",
                                                  (" — " + "; ".join(real)) if real else (" — 채울 칸 있음" if todo else "")))

@@ -21,6 +21,7 @@
 | 트렌디 체크 후보 재료·일정 체크 | `pipeline/collect/trends.py`, `pipeline/content/schedule_check.py`, `data/calendar/` (운영은 예약 작업 "트렌디 체크 후보") |
 | 지표 데이터 수집 (통계기관 API → DB → 사실 묶음). **서버에서 돈다** | `docs/13_indicator_data.md`, `pipeline/collect/`, `pipeline/console/jobs.py`(예약 작업 일꾼, docs/15 §5-2), `scripts/server_cron.sh`, `.env.example` |
 | 말투와 감정 규칙 | `templates/voice_guide.md` (표본은 `data/private/voice/`) |
+| SNS 글의 컨셉과 카피 원칙 (D27) | `docs/05_marketing_strategy.md` §0 · `templates/copy_guide.md` · `templates/avoid_terms.txt` |
 | 규제에서 지킬 것 | `docs/03_regulation_checklist.md`, `templates/banned_terms.txt`, `templates/disclaimer.md` |
 | 데이터 라이선스 | `docs/10_data_license.md` |
 | 마케팅·채널 | `docs/05_marketing_strategy.md`, `docs/07_channel_setup.md` |
