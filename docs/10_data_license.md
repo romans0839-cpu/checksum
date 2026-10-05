@@ -2,6 +2,11 @@
 
 상태: 조사 완료, 견적 전. 결정 기한 **10/16**(창간 10/20 전). 이 문서는 조사 기반 정리이며 법률 자문이 아니다.
 
+> **2026-10-06 방향 변경 (D26, Nick 결정).** 문의는 보내되 **가입자라고 밝히지 않고** 일반 문의로 보낸다(§4 초안을 그렇게 고쳤다). 답을 기다리지 않고, **벤더 데이터에서 나온 파생 수치(상태·순위·분포·통계)와 신호 종목명은 발행하는 방향**으로 간다. 답변을 본 뒤 따로 판단하며, 그때 바꿀 수 있다.
+> 그대로인 것: 원시 가격표·가격 차트·데이터 파일이나 내보내기는 싣지 않는다(처음부터 계획에 없다). 아래 §0~§3의 조사 내용(약관이 무엇을 요구하는가)은 사실 기록으로 그대로 둔다 — 바뀐 것은 약관이 아니라 우리의 방향이다.
+> 남는 위험(Nick이 알고 정함): 약관과 어긋난다고 벤더가 판단하면 계정이 해지될 수 있고, 라이브 봇이 같은 데이터(Norgate)로 돈다. 답변이 "불가"이거나 계정에 영향이 오면 즉시 해당 수치를 내리고 소스 교체를 정한다. 그래서 벤더 유래 사실에는 DB에서 출처(`vendor_px`) 표시를 남겨, 어느 발행물의 어느 문장이 해당하는지 바로 찾을 수 있게 한다.
+> 라이선스와 별개로 남는 확인: 백테스트 수치의 게재 범위, 무료 지연 공개가 추천에 해당하는지(변호사), 신고 전후의 표현 규칙(docs/03).
+
 ## 0. 결론
 
 1. **어느 벤더든 "다른 사람이 보게 되는 순간" 상업·표시 계약이 필요하다.** 원시 가격이 아니라 파생 지표(30주선 위/아래, 순위, 등락률)만 실어도 마찬가지다. 무료 발행물도 포함된다.
@@ -37,9 +42,10 @@
 - **통념 체크**은 Norgate 데이터로 만든 백테스트 통계다. 약관이 보유를 허용한 파생물이지만 상업적 게재는 별개 문제라 Norgate 메일에서 명시적으로 묻는다. 답을 받기 전에는 수치를 싣지 않는다.
 - 공공 출처로 대체 가능한 것: 실적·공시 원문(SEC EDGAR), 서학개미 보관 상위 종목(예탁결제원 세이브로 — 이용 조건 확인 필요).
 
-## 4. 메일 초안
+## 4. 메일 초안 (10/6 고침 — 가입자라고 밝히지 않는 일반 문의, D26)
 
-`[ ]` 부분만 채워 보내면 된다. 발신 주소는 hello@checksumlab.com(D9)이 준비되면 그것으로, 아니면 현재 계정 가입 메일로.
+`[ ]` 부분만 채워 보내면 된다. 발신은 hello@checksumlab.com. 기존 계정의 요금제·가입 메일은 적지 않는다. 사실과 다른 말은 쓰지 않는다 — 밝히지 않을 뿐이다. 계정을 물으면 그때 답한다.
+4통이 부담이면 4-1(Norgate)과 4-2(FMP)만 보낸다. 봇이 지금 쓰는 곳과 옮겨 갈 곳이다.
 
 ### 4-1. Norgate (support@norgatedata.com — 주소는 사이트에서 확인)
 
@@ -47,26 +53,22 @@ Subject: Licensing inquiry — publishing derived analysis in a subscription new
 
 Hello,
 
-I am a current Norgate Data subscriber ([plan name], account email: [email]). So far I have used the data only for personal research and trading.
+I am preparing to launch a Korean-language investment newsletter (free and paid tiers, operated by a sole proprietor in South Korea). I would like to know whether Norgate Data offers a license that covers the use below, and what it costs.
 
-I am preparing to launch a Korean-language investment newsletter (free and paid tiers, operated by me as a sole proprietor in South Korea). Before launch I would like to confirm what is permitted under the EULA, and whether a commercial or publishing arrangement is available for the items below.
-
-What I would like to publish:
-1. Weekly output of a rule-based system computed from Norgate data: ticker symbols of entry candidates and exits. No raw prices or volumes.
+What the newsletter would publish:
+1. Weekly output of a rule-based system computed from end-of-day data: ticker symbols of entry candidates and exits. No raw prices or volumes.
 2. Derived status indicators per stock and per industry group: above/below the 30-week moving average, relative-strength rank of industry groups, rank of 13-week return within a group.
 3. Aggregate backtest statistics in educational articles (for example, "exit rule A vs. exit rule B over 1994–2018").
 
-What I will not do: distribute data files, price tables, charts of price series, or any export or API access.
+What it would not do: distribute data files, price tables, charts of price series, or any export or API access.
 
-Audience: starting from zero; I expect a few thousand free readers and a few hundred paying subscribers within the first year. Planned first issue: October 20, 2026.
+Audience: starting from zero; a few thousand free readers and a few hundred paying subscribers expected within the first year.
 
 Questions:
-- Are items 1–3 permitted under my current license? If not, is there a license that permits them, and what does it cost?
+- Is there a license that permits items 1–3, and what does it cost?
 - Is attribution required, and in what form?
-- If none of this can be licensed, please let me know so I can move to another source before launch.
 
 Thank you,
-[Name]
 Checksum (checksumlab.com)
 
 ### 4-2. FMP (문의 양식 — 발행 권리 안내 글이 요구하는 항목 순서)
@@ -75,11 +77,11 @@ Subject: Data Display and Licensing Agreement inquiry — newsletter with derive
 
 Hello,
 
-I am an FMP subscriber ([plan name], account email: [email]) and would like to request terms for a Data Display and Licensing Agreement.
+I would like to request terms for a Data Display and Licensing Agreement.
 
-Use case: a Korean-language investment newsletter with free and paid tiers, operated by a sole proprietor in South Korea. Launch: October 20, 2026 (free), December 8, 2026 (paid).
+Use case: a Korean-language investment newsletter with free and paid tiers, operated by a sole proprietor in South Korea.
 
-Audience size and type: retail investors in Korea. Zero today; expected a few thousand free readers and a few hundred paying subscribers in year one.
+Audience size and type: retail investors in Korea. Zero today; a few thousand free readers and a few hundred paying subscribers expected in year one.
 
 Datasets and endpoints: end-of-day historical prices for US equities and ETFs (Russell 1000 constituents plus about 50 widely held names), index constituents, earnings calendar. No real-time or intraday data. No fundamentals at launch.
 
@@ -88,17 +90,15 @@ What is displayed:
 - A three-line daily market summary with index and sector percentage changes.
 - Later (2027): one public status page per ticker showing the same derived indicators.
 
-Publication frequency: a short email on weekdays, two fuller issues per week (Tuesday and Friday).
+Publication frequency: a short email on weekdays, two fuller issues per week.
 
 Download/export: none. No data files, no price tables, no API pass-through.
 
 Questions:
 - What is the fee for this scope, and does it differ between the free and paid tiers or by audience size?
 - Which attribution is required?
-- Can the agreement start before October 20?
 
 Thank you,
-[Name]
 Checksum (checksumlab.com)
 
 ### 4-3. 견적 요청 (EODHD sales@eodhistoricaldata.com · Massive sales@massive.com)
@@ -107,17 +107,16 @@ Subject: Quote request — display license for derived end-of-day indicators in 
 
 Hello,
 
-I am preparing a Korean-language investment newsletter (free and paid tiers, sole proprietor in South Korea, launching October 20, 2026). I need a license that allows displaying derived indicators computed from US end-of-day equity and ETF prices to newsletter readers and, later, on public web pages.
+I am preparing a Korean-language investment newsletter (free and paid tiers, sole proprietor in South Korea). I need a license that allows displaying derived indicators computed from US end-of-day equity and ETF prices to newsletter readers and, later, on public web pages.
 
 Scope: end-of-day prices with history from 1993 including delisted tickers if available; index constituents; earnings dates. Displayed content is derived only (moving-average status, relative-strength ranks, percentage changes). No raw price tables, no downloads, no API pass-through. Audience: zero today, a few thousand readers within a year.
 
 Could you tell me which plan covers this and the monthly cost?
 
 Thank you,
-[Name]
 Checksum (checksumlab.com)
 
-## 5. 결정할 때 볼 것 (10/16)
+## 5. 답변을 보고 판단할 때 볼 것 (기한을 두지 않는다 — D26. 답이 오는 대로)
 
 - 표시 권한 포함 월 비용, 최소 계약 기간
 - 1993년부터의 이력과 상폐 종목 포함 여부(통념 체크·기저율에 필요)
