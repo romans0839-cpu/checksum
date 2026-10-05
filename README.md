@@ -18,7 +18,7 @@
 | **PC 없이 도는 운영** (조종판 시트 + 서버 일꾼 + SNS 게시) | `docs/15_ops_console.md`, `pipeline/console/`, `pipeline/publish/threads.py`, `pipeline/publish/x.py`, `requirements-server.txt` |
 | **코드가 서버에 가는 길** (원본 = 이 저장소, 서버가 받아 자체 시험 뒤 반영, D24) | `docs/15_ops_console.md` §5-1, `scripts/server_sync.sh`, `sync.bat`(PC 사본 맞추기) |
 | 트렌디 체크 후보 재료·일정 체크 | `pipeline/collect/trends.py`, `pipeline/content/schedule_check.py`, `data/calendar/` (운영은 예약 작업 "트렌디 체크 후보") |
-| 지표 데이터 수집 (통계기관 API → DB → 사실 묶음) | `docs/13_indicator_data.md`, `pipeline/collect/`, `collect_indicators.bat`, `.env.example` |
+| 지표 데이터 수집 (통계기관 API → DB → 사실 묶음). **서버에서 돈다** | `docs/13_indicator_data.md`, `pipeline/collect/`, `pipeline/console/jobs.py`(예약 작업 일꾼, docs/15 §5-2), `scripts/server_cron.sh`, `.env.example` |
 | 말투와 감정 규칙 | `templates/voice_guide.md` (표본은 `data/private/voice/`) |
 | 규제에서 지킬 것 | `docs/03_regulation_checklist.md`, `templates/banned_terms.txt`, `templates/disclaimer.md` |
 | 데이터 라이선스 | `docs/10_data_license.md` |
@@ -46,7 +46,7 @@ python -m pipeline.ledger.commit      (또는 ledger_commit.bat)
 python -m pipeline.ledger.verify
 python -m pipeline.db.init
 python -m pipeline.forecast.selftest  (엔진 예측 봉인·채점 자체 시험)
-python -m pipeline.collect.bls        (또는 collect_indicators.bat — 노동통계국 지표 수집)
+python -m pipeline.collect.bls        (노동통계국 지표 수집. 서버에서는 python -m pipeline.console.jobs tick 이 때맞춰 돌린다)
 python -m pipeline.collect.selftest   (수집·DB·사실 묶음 자체 시험)
 python -m pipeline.publish.lint data/newsletters/drafts/<file>.md
 ```

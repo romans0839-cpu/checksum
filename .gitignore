@@ -8,6 +8,8 @@ data/newsletters/drafts/
 .DS_Store
 data/db/
 data/raw/
+# 서버가 쌓는 기록 — 처음 발표값(채점 기준). 서버 한 곳에서만 쓴다 (docs/13 §8)
+data/forecast/actuals.csv
 
 # 키와 비밀 파일 — 저장소에 올리지 않는다 (D23)
 .env.*

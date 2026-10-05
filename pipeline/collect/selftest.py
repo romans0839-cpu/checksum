@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+import urllib.error
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -169,6 +170,39 @@ def main():
         check("명령: 수집", c == 0 and "새 값" in out and "가장 최근 달: 2098-12" in out and len(os.listdir(os.path.join(tmp, "raw"))) == 1, out)
         c, out = run(bundle.main, ["--event", "CPI", "--ref", "2099-01", "--db", db4, "--schedule", sched, "--out-dir", os.path.join(tmp, "bundles")])
         check("명령: 묶음", c == 0 and "sha256" in out and len(os.listdir(os.path.join(tmp, "bundles"))) == 1, out)
+
+        # --- collect(): 서버의 예약 작업이 부르는 길. 요약을 돌려주고, 키는 어디에도 남기지 않는다
+        said = []
+        d5 = os.path.join(tmp, "t5.db")
+        base = dict(db=d5, raw_dir=os.path.join(tmp, "raw5"), schedule=sched, actuals=os.path.join(tmp, "a5.csv"), say=said.append)
+        when = datetime(2099, 1, 14, 13, 32, tzinfo=timezone.utc)
+        code, rep = bls.collect(from_file=fixture, now=when, **base)
+        check("collect(): 요약(새 값, 최근 달, 처음 발표값, 알림)", code == 0 and rep["ok"] and rep["new"] > 3000 and rep["newest"] == (2098, 12)
+              and sorted(r["target"] for r in rep["added"]) == ["CPI_CORE_MOM", "CPI_MOM", "CPI_YOY"] and len(rep["notes"]) == 1 and not rep["mismatch"], rep)
+        secret = "0123456789abcdef0123456789abcdef"
+
+        def bad_key(ids, y0, y1, key):
+            body = {"status": "REQUEST_NOT_PROCESSED", "message": ["The key:%s provided by the User is invalid." % key], "Results": {}}
+            return 200, json.dumps(body).encode("utf-8"), "u"
+
+        def down(ids, y0, y1, key):
+            raise urllib.error.URLError("timed out")
+
+        def with_note(ids, y0, y1, key):
+            doc = fake_response()
+            doc["message"] = ["request by %s accepted" % key]
+            return 200, json.dumps(doc).encode("utf-8"), "u"
+        base["db"], base["raw_dir"] = os.path.join(tmp, "t6.db"), os.path.join(tmp, "raw6")
+        said.clear()
+        c1, r1 = bls.collect(key=secret, fetcher=bad_key, now=when, **base)
+        c2, r2 = bls.collect(key=secret, fetcher=down, now=when, **base)
+        c3, r3 = bls.collect(key="", fetcher=down, now=when, **base)
+        check("collect(): 잘못된 키·접속 실패·키 없음은 이유와 함께 실패, 아무것도 쓰지 않음", (c1, r1["error_kind"]) == (1, "api") and (c2, r2["error_kind"]) == (1, "network")
+              and (c3, r3["error_kind"]) == (2, "no_key") and not os.path.exists(base["db"]) and not os.path.exists(base["raw_dir"]), (c1, r1["error"], c2, r2["error"], c3))
+        c4, r4 = bls.collect(key=secret, fetcher=with_note, now=when, **base)
+        saved = open(r4["raw_path"], "rb").read().decode("utf-8") if r4["raw_path"] else ""
+        check("collect(): 키는 화면·요약·원문 어디에도 남지 않음", c4 == 0 and "accepted" in saved and secret not in saved + " ".join(said) + json.dumps([r1, r2, r3, r4], default=str, ensure_ascii=False),
+              [x for x in said if secret in x])
 
     # --- 뜨는 검색어
     feed = ("""<?xml version="1.0" encoding="UTF-8"?>

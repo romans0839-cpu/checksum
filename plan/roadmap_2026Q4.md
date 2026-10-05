@@ -45,7 +45,7 @@ v4 → v5: 담당 표시와 이번 주 요일별 순서 추가, 유튜브를 PC 
 
 화 10/6
 - [ ] [N] 봇 신호 생성·push 확인 → **`ledger_commit.bat` 실행 (장부 기점)**. 23:31 봇 집행 전에. 화면 녹화를 켜고(메이킹 소재, D20)
-- [ ] [N] `collect_indicators.bat` 실행 (지표 첫 수집 = 실제 API 시험) → [C] 결과 확인
+- [ ] [N] 서버에서 `cd ~/checksum && git pull && bash scripts/server_cron.sh` (코드 자동 반영 켜기 + 지표 첫 수집 = 실제 API 시험. PC에서 돌리던 `collect_indicators.bat`을 대신한다, 10/6) → [C] 결과 확인
 - [ ] [N] 금감원 1332 문의 (15분) — `plan/1332_questions.md`
 - [ ] [N] 취업규칙 겸업 조항 확인
 - [ ] [N] 데이터 라이선스 메일 4통 발송 — docs/10 §4 초안, hello@checksumlab.com으로 (15분)

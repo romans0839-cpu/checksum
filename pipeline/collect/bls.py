@@ -1,7 +1,9 @@
 """노동통계국(BLS) 공개 API에서 물가·고용·생산자물가 계열을 받아 DB에 쌓는다. 표준 라이브러리만 사용.
 
-    python -m pipeline.collect.bls              받아서 저장 (collect_indicators.bat 과 같음)
-    python -m pipeline.collect.bls --dry-run    받아서 확인만 하고 저장하지 않음
+    python -m pipeline.collect.bls              받아서 저장
+    python -m pipeline.collect.bls --dry-run    받아서 확인만 하고 저장하지 않음 (PC의 collect_indicators.bat 과 같음)
+
+서버에서는 예약 작업 일꾼(pipeline/console/jobs.py)이 collect() 를 부른다: 매일 아침과 발표 직후. 기록은 서버 한 곳에만 쌓는다.
 
 하는 일
 1. catalog.py 의 계열을 한 번의 요청으로 받는다. .env 의 BLS_API_KEY 를 쓴다(없어도 돌지만 제목 대조를 못 하고 하루 25회 제한).
@@ -14,6 +16,7 @@
 import argparse
 import csv
 import glob
+import hashlib
 import json
 import os
 import sys
@@ -30,6 +33,8 @@ from . import env, store
 
 API_V2 = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 API_V1 = "https://api.bls.gov/publicAPI/v1/timeseries/data/"
+DEFAULT_SCHEDULE = os.path.join(store.ROOT, "data", "forecast", "schedule_*.csv")
+DEFAULT_ACTUALS = os.path.join(store.ROOT, "data", "forecast", "actuals.csv")
 LATE_DAYS = 20   # 발표 뒤 이보다 늦게 처음 받은 값은 수정치일 수 있어 '처음 발표값'으로 쓰지 않는다
 
 
@@ -207,94 +212,122 @@ def record_actuals(con, schedule_glob, actuals_path, now):
     return added, notes
 
 
+def redact(text, key):
+    """문구에 키가 섞여 있으면 가린다. 잘못된 키로 요청하면 오류 문구에 그 키가 그대로 실려 올 수 있다."""
+    return str(text).replace(key, "(키 가림)") if key else str(text)
+
+
+def collect(db=None, raw_dir=None, schedule=None, actuals=None, years=5, from_file=None, dry_run=False, now=None, say=print, key=None, fetcher=None):
+    """한 번 수집한다. (종료 코드, 요약)을 돌려준다. 화면에 낼 줄은 say 로 보낸다.
+
+    요약은 서버의 예약 작업 일꾼이 조종판 '오늘 현황'에 적는 재료다. 키 값은 요약·화면·원문 어디에도 남기지 않는다.
+    """
+    db = db or store.DEFAULT_DB
+    raw_dir = raw_dir or os.path.join(store.ROOT, "data", "raw", "bls")
+    schedule = schedule or DEFAULT_SCHEDULE
+    actuals = actuals or DEFAULT_ACTUALS
+    fetcher = fetcher or fetch
+    now = now or datetime.now(timezone.utc)
+    known_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    key = env.get("BLS_API_KEY") if key is None else key
+    ids = [row[0] for row in C.BLS]
+    rep = {"ok": False, "error": "", "error_kind": "", "received": 0, "listed": len(ids), "new": 0, "revised": 0, "same": 0, "newest": None,
+           "unknown": 0, "mismatch": [], "missing": [], "calc_diff": [], "added": [], "notes": [], "raw_path": "", "dry_run": bool(dry_run)}
+
+    def fail(code, kind, text):
+        rep["error"], rep["error_kind"] = text, kind
+        say("[%s] %s" % ("중단" if kind == "no_key" else "실패", text))
+        return code, rep
+
+    if from_file:
+        with open(from_file, "rb") as f:
+            status, raw, url = 200, f.read(), "file:" + os.path.basename(from_file)
+    else:
+        if not key:
+            say("[알림] .env 에 BLS_API_KEY 가 없습니다. 키 없이 받습니다(제목 대조 불가, 하루 25회, 계열 25개까지).")
+            if len(ids) > 25:
+                return fail(2, "no_key", "계열이 %d개라 키 없이는 한 번에 받을 수 없습니다. https://data.bls.gov/registrationEngine/ 에서 키를 받아 .env 에 넣으세요." % len(ids))
+        try:
+            status, raw, url = fetcher(ids, now.year - years + 1, now.year, key)
+        except (urllib.error.URLError, OSError) as e:
+            return fail(1, "network", "노동통계국 API에 닿지 못했습니다: %s" % redact(e, key))
+    if key and key.encode("utf-8") in raw:   # 원문에도 키를 남기지 않는다
+        raw = raw.replace(key.encode("utf-8"), "(키 가림)".encode("utf-8"))
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return fail(1, "unreadable", "응답을 읽을 수 없습니다 (HTTP %s)." % status)
+    if doc.get("status") != "REQUEST_SUCCEEDED":
+        return fail(1, "api", "API 상태 %r: %s" % (doc.get("status"), redact("; ".join(str(m) for m in doc.get("message") or []), key)[:400]))
+    parsed, messages = parse(doc)
+    rep["received"] = len(parsed)
+    say("받은 계열 %d개 / 목록 %d개 (%s)" % (len(parsed), len(ids), "키 사용" if key and not from_file else "키 없음 또는 파일"))
+    for m in messages[:8]:
+        say("   API 메시지: " + redact(m, key)[:160])
+
+    if dry_run:
+        for bls_id, group, name_ko, unit, keywords, derived in C.BLS:
+            item = parsed.get(bls_id)
+            if not item or not item["values"]:
+                say("   없음        %s %s" % (bls_id, name_ko))
+                continue
+            ym = max(item["values"])
+            say("   %-9s %s %s — 최신 %04d-%02d = %s" % (check_title(item["title"], keywords), bls_id, name_ko, ym[0], ym[1], item["values"][ym]))
+        say("--dry-run: 저장하지 않았습니다.")
+        rep["ok"] = True
+        return 0, rep
+
+    con = store.connect(db)
+    os.makedirs(raw_dir, exist_ok=True)
+    raw_path = os.path.join(raw_dir, "bls_%s.json" % now.strftime("%Y%m%dT%H%M%SZ"))
+    with open(raw_path, "wb") as f:
+        f.write(raw)
+    fetch_id = store.add_fetch(con, "bls", url, known_at, status, hashlib.sha256(raw).hexdigest(), os.path.relpath(raw_path, store.ROOT))
+    got = ingest(con, parsed, known_at, fetch_id)
+    added, notes = record_actuals(con, schedule, actuals, now)
+    con.execute("INSERT INTO job_run(job_id,started_at,finished_at,status,detail) VALUES ('collect_indicators',?,?,?,?)",
+                (known_at, store.utc_now(), "ok", "new=%d revised=%d same=%d" % (got["new"], got["revised"], got["same"])))
+    con.commit()
+    con.close()
+    for k in ("new", "revised", "same", "unknown", "mismatch", "missing", "calc_diff"):
+        rep[k] = got[k]
+    rep.update({"ok": True, "added": added, "notes": notes, "raw_path": raw_path,
+                "newest": max(got["latest"].values()) if got["latest"] else None})
+
+    say("저장: 새 값 %d / 수정된 값 %d / 그대로 %d" % (rep["new"], rep["revised"], rep["same"]))
+    if rep["newest"]:
+        say("가장 최근 달: %04d-%02d" % rep["newest"])
+    if rep["unknown"]:
+        say("[알림] 제목을 대조하지 못한 계열 %d개 (키가 없으면 제목이 오지 않습니다)" % rep["unknown"])
+    for line in rep["mismatch"]:
+        say("[주의] 제목 불일치 — 사실 묶음에서 빠집니다: " + line)
+    if rep["missing"]:
+        say("[주의] 값이 오지 않은 계열: " + ", ".join(rep["missing"]))
+    if rep["calc_diff"]:
+        say("[주의] 계산값이 API 계산과 다른 곳 %d건 (처음 5건):" % len(rep["calc_diff"]))
+        for line in rep["calc_diff"][:5]:
+            say("   " + line)
+    for r in added:
+        say("처음 발표값 기록: %s %s = %s" % (r["target"], r["ref_period"], r["actual"]))
+    for n in notes:
+        say("[주의] " + n)
+    say("원문: %s" % raw_path)
+    return 0, rep
+
+
 def main(argv=None):
     setup_console()
     ap = argparse.ArgumentParser(description="노동통계국 지표 수집")
     ap.add_argument("--db", default=store.DEFAULT_DB)
     ap.add_argument("--raw-dir", default=os.path.join(store.ROOT, "data", "raw", "bls"))
-    ap.add_argument("--schedule", default=os.path.join(store.ROOT, "data", "forecast", "schedule_*.csv"))
-    ap.add_argument("--actuals", default=os.path.join(store.ROOT, "data", "forecast", "actuals.csv"))
+    ap.add_argument("--schedule", default=DEFAULT_SCHEDULE)
+    ap.add_argument("--actuals", default=DEFAULT_ACTUALS)
     ap.add_argument("--years", type=int, default=5, help="올해 포함 몇 해를 받을지 (키 없으면 최대 10, 있으면 20)")
     ap.add_argument("--from-file", default=None, help="시험용: API 대신 저장된 응답 파일을 읽는다")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
-
-    now = datetime.now(timezone.utc)
-    known_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    key = env.get("BLS_API_KEY")
-    ids = [row[0] for row in C.BLS]
-    if a.from_file:
-        with open(a.from_file, "rb") as f:
-            status, raw, url = 200, f.read(), "file:" + os.path.basename(a.from_file)
-    else:
-        if not key:
-            print("[알림] .env 에 BLS_API_KEY 가 없습니다. 키 없이 받습니다(제목 대조 불가, 하루 25회, 계열 25개까지).")
-            if len(ids) > 25:
-                print("[중단] 계열이 %d개라 키 없이는 한 번에 받을 수 없습니다. https://data.bls.gov/registrationEngine/ 에서 키를 받아 .env 에 넣으세요." % len(ids))
-                return 2
-        try:
-            status, raw, url = fetch(ids, now.year - a.years + 1, now.year, key)
-        except (urllib.error.URLError, OSError) as e:
-            print("[실패] 노동통계국 API에 닿지 못했습니다: %s" % e)
-            return 1
-    try:
-        doc = json.loads(raw.decode("utf-8"))
-    except ValueError:
-        print("[실패] 응답을 읽을 수 없습니다 (HTTP %s)." % status)
-        return 1
-    if doc.get("status") != "REQUEST_SUCCEEDED":
-        print("[실패] API 상태 %r: %s" % (doc.get("status"), "; ".join(str(m) for m in doc.get("message") or [])[:400]))
-        return 1
-    parsed, messages = parse(doc)
-    print("받은 계열 %d개 / 목록 %d개 (%s)" % (len(parsed), len(ids), "키 사용" if key and not a.from_file else "키 없음 또는 파일"))
-    for m in messages[:8]:
-        print("   API 메시지: " + m[:160])
-
-    if a.dry_run:
-        for bls_id, group, name_ko, unit, keywords, derived in C.BLS:
-            item = parsed.get(bls_id)
-            if not item or not item["values"]:
-                print("   없음        %s %s" % (bls_id, name_ko))
-                continue
-            ym = max(item["values"])
-            print("   %-9s %s %s — 최신 %04d-%02d = %s" % (check_title(item["title"], keywords), bls_id, name_ko, ym[0], ym[1], item["values"][ym]))
-        print("--dry-run: 저장하지 않았습니다.")
-        return 0
-
-    con = store.connect(a.db)
-    os.makedirs(a.raw_dir, exist_ok=True)
-    import hashlib
-    raw_path = os.path.join(a.raw_dir, "bls_%s.json" % now.strftime("%Y%m%dT%H%M%SZ"))
-    with open(raw_path, "wb") as f:
-        f.write(raw)
-    fetch_id = store.add_fetch(con, "bls", url, known_at, status, hashlib.sha256(raw).hexdigest(), os.path.relpath(raw_path, store.ROOT))
-    rep = ingest(con, parsed, known_at, fetch_id)
-    added, notes = record_actuals(con, a.schedule, a.actuals, now)
-    con.execute("INSERT INTO job_run(job_id,started_at,finished_at,status,detail) VALUES ('collect_indicators',?,?,?,?)",
-                (known_at, store.utc_now(), "ok", "new=%d revised=%d same=%d" % (rep["new"], rep["revised"], rep["same"])))
-    con.commit()
-    con.close()
-
-    print("저장: 새 값 %d / 수정된 값 %d / 그대로 %d" % (rep["new"], rep["revised"], rep["same"]))
-    if rep["latest"]:
-        newest = max(rep["latest"].values())
-        print("가장 최근 달: %04d-%02d" % newest)
-    if rep["unknown"]:
-        print("[알림] 제목을 대조하지 못한 계열 %d개 (키가 없으면 제목이 오지 않습니다)" % rep["unknown"])
-    for line in rep["mismatch"]:
-        print("[주의] 제목 불일치 — 사실 묶음에서 빠집니다: " + line)
-    if rep["missing"]:
-        print("[주의] 값이 오지 않은 계열: " + ", ".join(rep["missing"]))
-    if rep["calc_diff"]:
-        print("[주의] 계산값이 API 계산과 다른 곳 %d건 (처음 5건):" % len(rep["calc_diff"]))
-        for line in rep["calc_diff"][:5]:
-            print("   " + line)
-    for r in added:
-        print("처음 발표값 기록: %s %s = %s" % (r["target"], r["ref_period"], r["actual"]))
-    for n in notes:
-        print("[주의] " + n)
-    print("원문: %s" % raw_path)
-    return 0
+    code, _ = collect(db=a.db, raw_dir=a.raw_dir, schedule=a.schedule, actuals=a.actuals, years=a.years, from_file=a.from_file, dry_run=a.dry_run)
+    return code
 
 
 if __name__ == "__main__":

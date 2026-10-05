@@ -2,15 +2,19 @@
 
     python -m pipeline.console.selftest
 """
+import csv
+import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..collect import store
+from ..collect.selftest import fake_response
 from ..publish import threads as threads_api
 from ..publish import x as x_api
 from . import board as B
+from . import jobs as J
 from . import worker as W
 
 
@@ -128,6 +132,100 @@ def main():
         srows = board.read(B.STATUS)
         check("오늘 현황: 다른 항목은 다른 줄, 같은 항목은 갱신", len(srows) == 2 and srows[1]["항목"] == "코드 반영" and srows[1]["결과"].startswith("실패") and srows[0]["항목"] == "게시 일꾼", srows)
         con.close()
+
+    # --- 예약 작업 일꾼: 지표 수집을 서버에서 돌리는 길
+    with tempfile.TemporaryDirectory() as tmp:
+        board = B.CsvBoard(os.path.join(tmp, "board"))
+        for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
+            board.ensure(tab)
+        sched = os.path.join(tmp, "schedule_t.csv")
+        with open(sched, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["event_kind", "title_ko", "ref_period", "release_et", "release_kst", "release_at_utc", "tier", "targets", "source_url", "checked"])
+            w.writerow(["CPI", "소비자물가", "2098-12", "", "", "2099-01-14T13:30:00Z", 1, "CPI_MOM CPI_CORE_MOM CPI_YOY", "u", 1])
+            w.writerow(["CLAIMS", "주간 신규 실업수당 청구", "2099-01-10", "", "", "2099-01-15T13:30:00Z", 2, "CLAIMS_INIT", "u", 0])
+            w.writerow(["GDP_ADV", "GDP 속보치", "2098Q4", "", "", "2099-01-16T13:30:00Z", 1, "GDP_ADV_QOQ", "u", 1])
+        full, early = os.path.join(tmp, "full.json"), os.path.join(tmp, "early.json")
+        doc = fake_response()
+        with open(full, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        for srs in doc["Results"]["series"]:   # 발표 직후 아직 새 달이 올라오지 않은 응답
+            srs["data"] = [d for d in srs["data"] if not (d["year"] == "2098" and d["period"] == "M12")]
+        with open(early, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        opts = {"db": os.path.join(tmp, "j.db"), "raw_dir": os.path.join(tmp, "raw"), "schedule": sched, "actuals": os.path.join(tmp, "actuals.csv"), "from_file": early}
+        t0 = datetime(2099, 1, 14, 13, 32, tzinfo=timezone.utc)   # 발표 2분 뒤
+        jlog = []
+        kw = dict(board_opener=lambda: board, log=jlog.append)
+
+        ids = [s.id for s in J.indicator_slots(t0, opts)]
+        check("예정: 매일 아침 + 수집기가 있는 발표 직후만", "release:CPI:2098-12" in ids and not any("CLAIMS" in i or "GDP" in i for i in ids)
+              and sum(i.startswith("daily:") for i in ids) == J.PLAN_DAYS + 2 and "daily:2099-01-14" in ids, ids)
+        ran = J.tick(now=t0, opts=opts, dry_run=True, **kw)
+        check("미리 보기는 돌리지도 기록하지도 않음", [r[1] for r in ran] == [["daily:2099-01-14", "release:CPI:2098-12"]] and ran[0][2] is None
+              and not os.path.exists(opts["actuals"]) and not board.read(B.STATUS), ran)
+        ran = J.tick(now=t0, opts=opts, **kw)
+        row = {r["항목"]: r for r in board.read(B.STATUS)}.get("지표 수집", {})
+        check("첫 바퀴: 수집하고 오늘 현황에 한 줄", len(ran) == 1 and ran[0][2]["ok"] and ran[0][2]["done"] == {"daily:2099-01-14"} and row.get("결과", "").startswith("정상 · 새 값")
+              and "최근 달 2098-11" in row["결과"] and row["마지막 실행(KST)"] == "2099-01-14 22:32", (ran, row))
+        check("발표값이 아직 없으면 메모에 적고 다시 받을 예정", "발표값이 아직 오지 않음(CPI 전월비" in row.get("메모", "") and "다음: " in row.get("메모", ""), row)
+        check("간격 안에는 다시 돌리지 않음", J.tick(now=t0 + timedelta(minutes=5), opts=opts, **kw) == [])
+        opts["from_file"] = full
+        ran = J.tick(now=t0 + timedelta(minutes=10), opts=opts, **kw)
+        row = {r["항목"]: r for r in board.read(B.STATUS)}["지표 수집"]
+        check("10분 뒤 다시 받아 처음 발표값을 기록하고 끝냄", len(ran) == 1 and ran[0][1] == ["release:CPI:2098-12"] and ran[0][2]["done"] == {"release:CPI:2098-12"}
+              and "처음 발표값 기록: CPI 전월비(계절조정) 2098-12 = " in row["메모"] and sum(1 for _ in open(opts["actuals"], encoding="utf-8")) == 4, (ran, row))
+        check("끝난 예정은 다시 돌리지 않음", J.tick(now=t0 + timedelta(minutes=20), opts=opts, **kw) == [] and J.tick(now=t0 + timedelta(hours=2), opts=opts, **kw) == [])
+        con = store.connect(opts["db"])
+        runs = con.execute("SELECT status, detail FROM job_run WHERE job_id='collect_indicators' AND detail LIKE 'slot=%' ORDER BY run_id").fetchall()
+        con.close()
+        check("실행 기록: 예정마다 한 줄씩", [(st_, d.split()[0]) for st_, d in runs] == [("ok", "slot=daily:2099-01-14"), ("skipped", "slot=release:CPI:2098-12"),
+                                                                              ("ok", "slot=release:CPI:2098-12")], runs)
+
+        # 실패와 다시 시도
+        calls = []
+        blank = {"ok": False, "error": "", "error_kind": "", "received": 0, "listed": 27, "new": 0, "revised": 0, "same": 0, "newest": None, "unknown": 0,
+                 "mismatch": [], "missing": [], "calc_diff": [], "added": [], "notes": [], "raw_path": ""}
+
+        def failing(**k):
+            calls.append(k["now"])
+            return 1, dict(blank, error="노동통계국 API에 닿지 못했습니다: timed out", error_kind="network")
+        o2 = dict(opts, db=os.path.join(tmp, "j2.db"), collect=failing)
+        t1 = datetime(2099, 2, 1, 0, 0, tzinfo=timezone.utc)
+        J.tick(now=t1, opts=o2, **kw)
+        row = {r["항목"]: r for r in board.read(B.STATUS)}["지표 수집"]
+        check("실패하면 이유와 다시 시도 시각을 적음", len(calls) == 1 and row["결과"].startswith("실패: 노동통계국 API에 닿지 못했습니다") and "60분 뒤 다시 시도 (1/24)" in row["메모"], row)
+        J.tick(now=t1 + timedelta(minutes=30), opts=o2, **kw)
+        J.tick(now=t1 + timedelta(minutes=60), opts=o2, **kw)
+        check("실패한 예정은 정해진 간격으로만 다시 시도", calls == [t1, t1 + timedelta(minutes=60)], calls)
+        con = store.connect(o2["db"])
+        soon = t1 + timedelta(minutes=65)
+        check("사람이 직접 돌릴 때는 간격을 따지지 않고 끝나지 않은 예정을 함께 처리", [s.id for s in J.due_slots(con, J.JOBS[0], soon, o2)] == []
+              and [s.id for s in J.due_slots(con, J.JOBS[0], soon, o2, ignore_gap=True)] == ["daily:2099-02-01"])
+        con.close()
+        o3 = dict(opts, db=os.path.join(tmp, "j3.db"), collect=lambda **k: (2, dict(blank, error="키 없음", error_kind="no_key")))
+        J.tick(now=t1, opts=o3, **kw)
+        row = {r["항목"]: r for r in board.read(B.STATUS)}["지표 수집"]
+        check("키가 없으면 무엇을 넣어야 하는지 적음", "BLS_API_KEY" in row["결과"] and ".env" in row["메모"], row)
+
+        def broken(**k):
+            raise RuntimeError("boom")
+
+        def no_board():
+            raise SystemExit("[중단] 조종판 시트를 열 수 없습니다: 권한")
+        jlog.clear()
+        ran = J.tick(now=t1, opts=dict(opts, db=os.path.join(tmp, "j4.db"), collect=broken), board_opener=no_board, log=jlog.append)
+        check("작업이 멈추거나 조종판을 못 열어도 일꾼은 끝까지 돌고 기록을 남김", len(ran) == 1 and not ran[0][2]["ok"] and "도중에 멈춤" in ran[0][2]["result"]
+              and any("조종판에 적지 못함" in x for x in jlog), (ran, jlog))
+        tue = datetime(2099, 1, 1, 14, 30, tzinfo=timezone.utc)   # 한국 시간 23:30
+        while tue.astimezone(J.KST).weekday() != 1:
+            tue += timedelta(days=1)
+        n_before = len(calls)
+        check("화요일 봇 집행 시간에는 돌리지 않음", J.is_quiet(tue) and not J.is_quiet(tue + timedelta(minutes=30)) and J.tick(now=tue, opts=dict(o2, db=os.path.join(tmp, "j5.db")), **kw) == []
+              and len(calls) == n_before)
+        res, memo = J.indicator_summary(dict(blank, ok=True, new=5, newest=(2098, 12), mismatch=["CUSR0000SETG01 (항공료): Airline fares in U.S. city average"], missing=["WPSFD41"], unknown=2))
+        check("요약: 고칠 때 필요한 내용(제목 불일치, 오지 않은 계열)을 그대로", res.startswith("주의 2건 · 새 값 5") and any("Airline fares" in m for m in memo) and any("WPSFD41" in m for m in memo)
+              and any("대조하지 못한 계열 2개" in m for m in memo), (res, memo))
 
     class FakeApi(Exception):
         pass

@@ -53,7 +53,7 @@ JOBS = [
     ("build_myth", "목 21:00", "통념 체크 초안 → 검수 요청", 0),
     ("score_judgments", "화 11:00", "13주 지난 판정 채점", 0),
     ("backup_db", "매일 03:00", "DB 파일 백업", 0),
-    ("collect_indicators", "발표일 밤 (발표 30분 뒤)", "물가·고용·PCE·GDP 발표값과 과거 값 수집 (BLS·BEA)", 0),
+    ("collect_indicators", "매일 07:10 + 발표 2분 뒤 (값이 올 때까지 10분마다)", "물가·고용·생산자물가 발표값과 과거 값 수집 (노동통계국. 서버의 예약 작업 일꾼이 돌린다)", 0),
     ("seal_forecasts", "화 09:40 (자동화 뒤에는 발표 전날)", "그 주 발표분 엔진 예측을 장부에 봉인 (발표 12시간 전 마감)", 0),
     ("score_forecasts", "발표 다음 날 아침", "봉인된 예측을 처음 발표값으로 채점", 0),
     ("collect_trends", "하루 3번 (아침·낮·저녁)", "뜨는 검색어 수집(한국·미국) → 트렌디 체크 후보 재료", 0),
@@ -75,7 +75,8 @@ def init(path):
     with open(os.path.join(HERE, "schema.sql"), encoding="utf-8") as f:
         con.executescript(f.read())
     con.executemany("INSERT OR IGNORE INTO source(source_id,name,kind,rights,attribution,url,note) VALUES (?,?,?,?,?,?,?)", SOURCES)
-    con.executemany("INSERT OR IGNORE INTO job(job_id,schedule_kst,description,blocks_publish) VALUES (?,?,?,?)", JOBS)
+    con.executemany("INSERT INTO job(job_id,schedule_kst,description,blocks_publish) VALUES (?,?,?,?) "
+                    "ON CONFLICT(job_id) DO UPDATE SET schedule_kst=excluded.schedule_kst, description=excluded.description", JOBS)   # 표기는 코드가 기준
     from pipeline.forecast import targets as T   # 예측 대상 목록은 코드가 기준 (pipeline/forecast/targets.py)
     con.executemany("INSERT OR IGNORE INTO forecast_target(target_id,event_kind,name_ko,unit,decimals,source_id,tier) VALUES (?,?,?,?,?,?,?)",
                     [(t, v[0], v[1], v[2], v[3], T.EVENTS[v[0]][1], v[4]) for t, v in T.TARGETS.items()])

@@ -9,7 +9,7 @@
 python -m pipeline.forecast.selftest                      이 PC에서 제대로 도는지 확인(임시 폴더, 실제 장부는 건드리지 않음)
 python -m pipeline.forecast.engine register --name adler --label 아들러 --version 1 --model <모델ID> --n-runs 5 --dir data/private/engines/adler/v1
 python -m pipeline.forecast.engine list
-python -m pipeline.collect.bls                            지표 수집 (collect_indicators.bat). 설계는 docs/13
+python -m pipeline.collect.bls                            지표 수집. 서버의 예약 작업 일꾼이 돌린다 (docs/13 §8)
 python -m pipeline.forecast.bundle --event CPI --ref 2026-09   두 엔진에 줄 사실 묶음 만들기
 python -m pipeline.forecast.seal --file <예측파일.json>     발표 12시간 전까지. --dry-run 으로 미리 보기
 python -m pipeline.forecast.score                         처음 발표값으로 채점

@@ -1,6 +1,6 @@
 # 파이프라인 설계 (v0.2, 2026-10-05 — D12 반영)
 
-> 콘텐츠 생성 구조(DB, 사실 표, 초안·검사·말투 단계)는 **docs/11_content_system_design.md**가 기준이다. 아래 그림의 `judgments/`·`content/` 모듈은 그 구조 위에서 구현한다. 구현된 것: `ledger/`(장부 v0), `db/`(표 정의·생성), `forecast/`(엔진 예측의 등록·봉인·채점·사실 묶음 v0 — docs/12, 실행기는 아직 없음), `collect/`(노동통계국 지표 수집 v0 — docs/13, 뜨는 검색어 수집 v0 — docs/14, 둘 다 실제 접속 시험 전), `content/schedule_check.py`(일정 체크 생성기 v0).
+> 콘텐츠 생성 구조(DB, 사실 표, 초안·검사·말투 단계)는 **docs/11_content_system_design.md**가 기준이다. 아래 그림의 `judgments/`·`content/` 모듈은 그 구조 위에서 구현한다. 구현된 것: `ledger/`(장부 v0), `db/`(표 정의·생성), `forecast/`(엔진 예측의 등록·봉인·채점·사실 묶음 v0 — docs/12, 실행기는 아직 없음), `collect/`(노동통계국 지표 수집 v0 — docs/13, 서버의 예약 작업 일꾼 `console/jobs.py`가 돌린다. 뜨는 검색어 수집 v0 — docs/14), `content/schedule_check.py`(일정 체크 생성기 v0).
 
 목표: 1인 운영으로 주간 리듬(화 본편·프로, 금 무료 레터) + 평일 자동 3줄. 검수는 화·금에 집중, 평일은 5분 이내.
 v0.1과의 차이: 신호 원천을 실제 라이브 봇(`C:\us_swing_bot`, 주 1회)으로 정정, "실시간 시그널" 제거, 장부·채점표·수치 대조 lint 추가.

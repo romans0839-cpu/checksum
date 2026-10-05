@@ -49,14 +49,16 @@ python -m pipeline.publish.lint data/newsletters/drafts/<file>.md   # 발행 전
 python -m pipeline.ledger.commit                    # 이번 주 신호 장부 봉인 (ledger_commit.bat)
 python -m pipeline.ledger.verify                    # 장부 점검
 python -m pipeline.db.init                          # 콘텐츠 DB 생성 (data/db/checksum.db)
-python -m pipeline.collect.bls                      # 노동통계국 지표 수집 (collect_indicators.bat). --dry-run 은 저장 없이 확인만
+python -m pipeline.collect.bls                      # 노동통계국 지표 수집 — 서버에서는 예약 작업 일꾼이 돌린다. --dry-run 은 저장 없이 확인만(PC의 collect_indicators.bat)
 python -m pipeline.collect.selftest                 # 수집·DB·사실 묶음 자체 시험 (인터넷·실제 DB 안 씀)
 python -m pipeline.collect.trends                   # 뜨는 검색어 수집(한국·미국) — 트렌디 체크 후보 재료
 python -m pipeline.content.schedule_check           # 일정 체크(7일). --tonight 은 오늘 밤 것만
 python -m pipeline.content.selftest                 # 일정 체크 자체 시험
 python -m pipeline.console.selftest                 # 조종판 일꾼 자체 시험 (시트·계정 안 씀)
 python -m pipeline.console.worker run --dry-run     # 조종판에서 승인된 글을 올리지 않고 미리 보기 (서버)
+python -m pipeline.console.jobs tick                # 서버: 때가 된 예약 작업(지표 수집 등)을 돌리고 '오늘 현황'에 적는다 (cron 5분마다). plan 은 앞으로의 예정, run <작업> 은 지금 한 번
 bash scripts/server_sync.sh                         # 서버: 새 코드 받기 → 자체 시험 → 반영 또는 되돌림 (cron 10분마다)
+bash scripts/server_cron.sh                         # 서버: 예약 세 줄 맞추기 (한 번). 예약 작업의 시각은 cron 이 아니라 pipeline/console/jobs.py 가 정한다
 python -m pipeline.forecast.bundle --event CPI --ref 2026-09   # 엔진에 줄 사실 묶음 만들기
 python -m pipeline.forecast.selftest                # 엔진 예측 봉인·채점 자체 시험 (실제 장부는 건드리지 않음)
 python -m pipeline.forecast.seal --file <예측.json>  # 예측 봉인 (발표 12시간 전까지)
