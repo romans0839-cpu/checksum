@@ -1,0 +1,22 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+data/private/
+data/newsletters/drafts/
+*.log
+.DS_Store
+data/db/
+data/raw/
+
+# 키와 비밀 파일 — 저장소에 올리지 않는다 (D23)
+.env.*
+!.env.example
+/*.json
+*service*account*.json
+*.pem
+*.key
+*.p12
+keys/
+# 개인정보가 든 서류
+docs/*.pdf

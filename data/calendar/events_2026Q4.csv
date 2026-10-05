@@ -1,0 +1,8 @@
+event_kind,title_ko,ref_period,release_et,release_kst,release_at_utc,tier,targets,source_url,checked,note
+FOMC,연준 금리 결정(FOMC),2026-10,2026-10-28 14:00,2026-10-29 03:00,2026-10-28T18:00:00Z,,,https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm,1,성명 발표. 기자회견은 30분 뒤
+DST,미국 서머타임 끝,2026-11,2026-11-01,2026-11-01,2026-11-01T04:00:00Z,,,https://www.nyse.com/markets/hours-calendars,1,"이날부터 미국 일정이 한국 시간으로 1시간씩 늦어진다(개장 23:30, 발표 22:30)"
+HOLIDAY,미국장 휴장(추수감사절),2026-11-26,2026-11-26,2026-11-26,2026-11-26T05:00:00Z,,,https://www.nyse.com/markets/hours-calendars,0,
+EARLY_CLOSE,미국장 조기 폐장(추수감사절 다음 날),2026-11-27,2026-11-27 13:00,2026-11-28 03:00,2026-11-27T18:00:00Z,,,https://www.nyse.com/markets/hours-calendars,0,폐장 시각
+FOMC,연준 금리 결정(FOMC) + 경제전망,2026-12,2026-12-09 14:00,2026-12-10 04:00,2026-12-09T19:00:00Z,,,https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm,1,경제전망(점도표) 포함. 기자회견은 30분 뒤
+EARLY_CLOSE,미국장 조기 폐장(성탄절 전날),2026-12-24,2026-12-24 13:00,2026-12-25 03:00,2026-12-24T18:00:00Z,,,https://www.nyse.com/markets/hours-calendars,0,폐장 시각
+HOLIDAY,미국장 휴장(성탄절),2026-12-25,2026-12-25,2026-12-25,2026-12-25T05:00:00Z,,,https://www.nyse.com/markets/hours-calendars,0,
