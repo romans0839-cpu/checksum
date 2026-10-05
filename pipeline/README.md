@@ -32,7 +32,7 @@ pipeline/content/
   daily.py      평일 아침 체크 5줄 (미국장 3줄 + 금리·환율 + 일정, 사실만)
   global_.py    글로벌 체크 초안 (1차 발표문 → 4줄 형식) + 금리·환율 체크판
   tuesday.py    화요일 본편 (기본) / 주간 모델 포트폴리오 (프로)
-  friday.py     금요일 무료 레터 (통념 체크 + 장부 지연 공개 + 채점표 요약)
+  friday.py     금요일 무료 레터 (고정관념 체크 + 장부 지연 공개 + 채점표 요약)
         │
         ▼  초안 → data/newsletters/drafts/  (사람 검수)
 pipeline/publish/
