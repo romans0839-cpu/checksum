@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from calendar import monthrange
@@ -37,6 +38,7 @@ API_V2 = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 API_V1 = "https://api.bls.gov/publicAPI/v1/timeseries/data/"
 DEFAULT_SCHEDULE = os.path.join(store.ROOT, "data", "forecast", "schedule_*.csv")
 DEFAULT_ACTUALS = os.path.join(store.ROOT, "data", "forecast", "actuals.csv")
+RETRY_WAITS = (5, 20)   # 서버 쪽 오류(5xx)나 접속 실패면 이만큼(초) 쉬고 두 번 더 받아 본다. 노동통계국 API는 가끔 503을 낸다
 LATE_DAYS = 20   # 발표 뒤 이보다 늦게 처음 받은 값은 수정치일 수 있어 '처음 발표값'으로 쓰지 않는다
 
 
@@ -59,6 +61,23 @@ def fetch(series_ids, start_year, end_year, key, timeout=40):
                                  headers={"Content-Type": "application/json", "User-Agent": "checksumlab-collector/0.1"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, r.read(), url
+
+
+def fetch_retry(fetcher, ids, start_year, end_year, key, waits=RETRY_WAITS, say=print, sleep=time.sleep):
+    """잠깐의 장애는 그 자리에서 다시 받는다. 키·요청이 틀린 경우(4xx)는 다시 받지 않는다."""
+    for i in range(len(waits) + 1):
+        try:
+            return fetcher(ids, start_year, end_year, key)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or i == len(waits):
+                raise
+            why = "HTTP %s" % e.code
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+            if i == len(waits):
+                raise
+            why = type(e).__name__
+        say("   받지 못함(%s). %d초 뒤 다시 받습니다 (%d/%d)" % (why, waits[i], i + 1, len(waits)))
+        sleep(waits[i])
 
 
 def month_end(year, month):
@@ -228,7 +247,7 @@ def redact(text, key):
     return re.sub(re.escape(key), "(키 가림)", str(text), flags=re.IGNORECASE) if key else str(text)
 
 
-def collect(db=None, raw_dir=None, schedule=None, actuals=None, years=5, from_file=None, dry_run=False, now=None, say=print, key=None, fetcher=None):
+def collect(db=None, raw_dir=None, schedule=None, actuals=None, years=5, from_file=None, dry_run=False, now=None, say=print, key=None, fetcher=None, retry_waits=None):
     """한 번 수집한다. (종료 코드, 요약)을 돌려준다. 화면에 낼 줄은 say 로 보낸다.
 
     요약은 서버의 예약 작업 일꾼이 조종판 '오늘 현황'에 적는 재료다. 키 값은 요약·화면·원문 어디에도 남기지 않는다.
@@ -259,7 +278,7 @@ def collect(db=None, raw_dir=None, schedule=None, actuals=None, years=5, from_fi
             if len(ids) > 25:
                 return fail(2, "no_key", "계열이 %d개라 키 없이는 한 번에 받을 수 없습니다. https://data.bls.gov/registrationEngine/ 에서 키를 받아 .env 에 넣으세요." % len(ids))
         try:
-            status, raw, url = fetcher(ids, now.year - years + 1, now.year, key)
+            status, raw, url = fetch_retry(fetcher, ids, now.year - years + 1, now.year, key, RETRY_WAITS if retry_waits is None else retry_waits, say)
         except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
             return fail(1, "network", "노동통계국 API에 닿지 못했습니다: %s" % redact(e, key))
     if key and len(key) >= 16 and not from_file and key.encode("utf-8") in raw:   # 원문에도 키를 남기지 않는다(실제 키는 32자. 짧은 값은 자료와 겹칠 수 있어 건드리지 않는다)

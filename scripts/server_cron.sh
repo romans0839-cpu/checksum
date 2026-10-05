@@ -66,8 +66,9 @@ EOF
   flock -w 100 "$logs/worker.lock" timeout 600 "$py" -m pipeline.console.jobs run collect_indicators 2>&1 | tee -a "$logs/jobs.log" | sed 's/^/   /'
   local code="${PIPESTATUS[0]}"
   if [ "$code" != 0 ]; then
-    echo "[주의] 지표 수집이 끝까지 돌지 못했습니다 (종료 코드 $code). 위에 이유가 없으면 다른 작업이 도는 중이었을 수 있으니 2분 뒤 이 스크립트를 다시 돌려 보세요."
-    echo "       예약 세 줄은 맞춰졌습니다. 그대로 두어도 한 시간 안에 다시 시도합니다."
+    echo "[주의] 지표 수집이 이번에는 되지 않았습니다 (종료 코드 $code). 이유는 위의 [실패] 줄입니다."
+    echo "       접속 실패(HTTP 503 등)는 노동통계국 쪽의 잠깐 장애인 경우가 많습니다. 몇 분 뒤 이 스크립트를 다시 돌리거나, 그대로 두면 한 시간 안에 다시 시도합니다."
+    echo "       [실패] 줄이 없으면 다른 작업이 도는 중이었던 것이니 2분 뒤 다시 돌려 보세요. 예약 세 줄은 맞춰졌습니다."
     return 0
   fi
   echo "끝. 화면에 [주의]나 '실패'가 있으면 그 줄을 그대로 Claude에게 알려 주세요."

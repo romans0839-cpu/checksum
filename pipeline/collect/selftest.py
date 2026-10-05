@@ -174,7 +174,7 @@ def main():
         # --- collect(): 서버의 예약 작업이 부르는 길. 요약을 돌려주고, 키는 어디에도 남기지 않는다
         said = []
         d5 = os.path.join(tmp, "t5.db")
-        base = dict(db=d5, raw_dir=os.path.join(tmp, "raw5"), schedule=sched, actuals=os.path.join(tmp, "a5.csv"), say=said.append)
+        base = dict(db=d5, raw_dir=os.path.join(tmp, "raw5"), schedule=sched, actuals=os.path.join(tmp, "a5.csv"), say=said.append, retry_waits=())
         when = datetime(2099, 1, 14, 13, 32, tzinfo=timezone.utc)
         code, rep = bls.collect(from_file=fixture, now=when, **base)
         check("collect(): 요약(새 값, 최근 달, 처음 발표값, 알림)", code == 0 and rep["ok"] and rep["new"] > 3000 and rep["newest"] == (2098, 12)
@@ -199,6 +199,23 @@ def main():
         c3, r3 = bls.collect(key="", fetcher=down, now=when, **base)
         check("collect(): 잘못된 키·접속 실패·키 없음은 이유와 함께 실패, 아무것도 쓰지 않음", (c1, r1["error_kind"]) == (1, "api") and (c2, r2["error_kind"]) == (1, "network")
               and (c3, r3["error_kind"]) == (2, "no_key") and not os.path.exists(base["db"]) and not os.path.exists(base["raw_dir"]), (c1, r1["error"], c2, r2["error"], c3))
+        tried = []
+
+        def flaky(ids, y0, y1, key):
+            tried.append(1)
+            if len(tried) < 3:
+                raise urllib.error.HTTPError("u", 503, "Service Unavailable", None, None)
+            return 200, json.dumps(fake_response()).encode("utf-8"), "u"
+
+        def refused(ids, y0, y1, key):
+            tried.append(1)
+            raise urllib.error.HTTPError("u", 400, "Bad Request", None, None)
+        c5, r5 = bls.collect(key=secret, fetcher=flaky, now=when, **dict(base, db=os.path.join(tmp, "t7.db"), raw_dir=os.path.join(tmp, "raw7"), retry_waits=(0, 0)))
+        n_flaky = len(tried)
+        tried.clear()
+        c6, r6 = bls.collect(key=secret, fetcher=refused, now=when, **dict(base, retry_waits=(0, 0)))
+        check("collect(): 서버 쪽 오류(503)는 그 자리에서 다시 받고, 요청이 틀린 경우(400)는 다시 받지 않음", c5 == 0 and r5["ok"] and n_flaky == 3 and c6 == 1 and len(tried) == 1
+              and r6["error_kind"] == "network", (c5, n_flaky, c6, len(tried), r6["error"]))
         c4, r4 = bls.collect(key=secret, fetcher=with_note, now=when, **base)
         saved = open(r4["raw_path"], "rb").read().decode("utf-8") if r4["raw_path"] else ""
         check("collect(): 키는 화면·요약·원문 어디에도 남지 않음", c4 == 0 and "accepted" in saved and secret not in saved + " ".join(said) + json.dumps([r1, r2, r3, r4], default=str, ensure_ascii=False),
