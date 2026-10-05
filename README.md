@@ -16,6 +16,7 @@
 | **콘텐츠 구조** (줄기 × 깊이 × 채널, D21 확정) | `docs/14_content_architecture.md` |
 | 두 엔진 지표 예측 (봉인·채점) | `docs/12_forecast_engines.md`, `pipeline/forecast/`, `data/forecast/` |
 | **PC 없이 도는 운영** (조종판 시트 + 서버 일꾼 + SNS 게시) | `docs/15_ops_console.md`, `pipeline/console/`, `pipeline/publish/threads.py`, `pipeline/publish/x.py`, `requirements-server.txt` |
+| **SNS 초안이 조종판에 들어오는 길** (저장소의 초안 파일 → 대기열 '초안') | `docs/15_ops_console.md` §5-3, `pipeline/console/drafts.py`, `data/sns/drafts/` |
 | **코드가 서버에 가는 길** (원본 = 이 저장소, 서버가 받아 자체 시험 뒤 반영, D24) | `docs/15_ops_console.md` §5-1, `scripts/server_sync.sh`, `sync.bat`(PC 사본 맞추기) |
 | 트렌디 체크 후보 재료·일정 체크 | `pipeline/collect/trends.py`, `pipeline/content/schedule_check.py`, `data/calendar/` (운영은 예약 작업 "트렌디 체크 후보") |
 | 지표 데이터 수집 (통계기관 API → DB → 사실 묶음). **서버에서 돈다** | `docs/13_indicator_data.md`, `pipeline/collect/`, `pipeline/console/jobs.py`(예약 작업 일꾼, docs/15 §5-2), `scripts/server_cron.sh`, `.env.example` |

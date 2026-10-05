@@ -8,8 +8,8 @@
 
 규칙
 - 상태가 '승인'이고 예약 시각이 지난 줄만 올린다. '초안'·'보류'는 건드리지 않는다. 사람이 승인하지 않은 글은 올라가지 않는다.
-- 올리기 전에 검사한다: 금지어(templates/banned_terms.txt), 본문 안의 링크(링크는 셀프 답글에만), 길이(스레드 500자 / X 가중 280).
-  걸리면 올리지 않고 '막힘'으로 바꾸고 이유를 적는다.
+- 올리기 전에 검사한다: 금지어(templates/banned_terms.txt), 본문 안의 링크(링크는 셀프 답글에만), 길이(스레드 500자 / X 가중 280),
+  채우지 않은 칸([채울 것: ...]). 걸리면 올리지 않고 '막힘'으로 바꾸고 이유를 적는다.
 - 올리기 직전에 '게시 중'으로 바꾼다. 도중에 멈춘 줄('게시 중'으로 남은 줄)은 다시 올리지 않는다 — 두 번 올라가는 것을 막기 위해서다.
 - X에는 링크가 든 셀프 답글을 달지 않는다(요금). .env 의 X_ALLOW_LINK_REPLY=1 로 풀 수 있다.
 - 올라간 글은 DB(sns_post)에 처음 문안과 올린 문안을 함께 남긴다. 고친 흔적이 말투의 기준이 된다.
@@ -17,6 +17,7 @@
 import argparse
 import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 from ..collect import env as envmod
@@ -27,6 +28,13 @@ from . import board as B
 
 KST = timezone(timedelta(hours=9))
 URL_RE = re.compile(r"https?://\S+")
+TODO_RE = re.compile(r"[\[(【〔<{]\s*채울\s*것[^\])】〕>}]{0,80}[\])】〕>}]?|채울\s*것\s*:[^\n\]]{0,80}\]?")   # 초안에 남겨 둔 빈칸(괄호 한쪽이 지워져도 잡는다)
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
+
+
+def _plain(text):
+    """전각 괄호·콜론, 풀어쓴 한글 자모, 보이지 않는 문자를 정리한 사본. 검사에만 쓴다."""
+    return unicodedata.normalize("NFKC", text or "").translate(_INVISIBLE)
 
 
 def setup_console():
@@ -53,6 +61,9 @@ def check_text(channel, text, reply, banned):
     for term in banned:
         if re.search(term, body) or re.search(term, reply or ""):
             problems.append("금지어: %s" % term)
+    todo = TODO_RE.findall(_plain(body)) + TODO_RE.findall(_plain(reply))
+    if todo:
+        problems.append("채우지 않은 칸 %d곳: %s" % (len(todo), ", ".join(todo)[:120]))
     if URL_RE.search(body):
         problems.append("본문에 링크가 있음(링크는 셀프 답글에)")
     if channel == B.CH_THREADS:
@@ -76,15 +87,27 @@ def parse_slot(text):
     return "bad"
 
 
+def add_drafts(board, items, banned=None):
+    """초안 여러 줄을 한 번에 넣는다(시트를 한 번 읽고 한 번 쓴다). items: [{"channel", "slot", "text", "reply", "note"}].
+    상태는 언제나 '초안'이다. 넣을 때 검사해 결과를 '검사' 칸에 적어 둔다. 돌려주는 값: [(번호, 문제 목록)]."""
+    banned = banned if banned is not None else banned_terms()
+    numbers = [int(r["번호"]) for r in board.read(B.QUEUE) if str(r.get("번호", "")).isdigit()]
+    nxt = max(numbers) + 1 if numbers else 1
+    rows, out = [], []
+    for i, it in enumerate(items):
+        text, reply = it["text"], it.get("reply") or ""
+        problems = check_text(it["channel"], text, reply, banned)
+        rows.append({"번호": str(nxt + i), "예약(KST)": it.get("slot") or "", "채널": it["channel"], "본문": text, "셀프 답글": reply, "상태": B.ST_DRAFT,
+                     "검사": "이상 없음" if not problems else " / ".join(problems), "처음 문안": text, "메모": it.get("note") or ""})
+        out.append((str(nxt + i), problems))
+    if rows:
+        board.append(B.QUEUE, rows)
+    return out
+
+
 def add_draft(board, channel, slot, text, reply="", note="", banned=None):
-    """초안 한 줄을 넣는다. 넣을 때 검사해 결과를 '검사' 칸에 적어 둔다."""
-    rows = board.read(B.QUEUE)
-    numbers = [int(r["번호"]) for r in rows if str(r.get("번호", "")).isdigit()]
-    no = str(max(numbers) + 1 if numbers else 1)
-    problems = check_text(channel, text, reply, banned if banned is not None else banned_terms())
-    board.append(B.QUEUE, [{"번호": no, "예약(KST)": slot or "", "채널": channel, "본문": text, "셀프 답글": reply or "", "상태": B.ST_DRAFT,
-                            "검사": "이상 없음" if not problems else " / ".join(problems), "처음 문안": text, "메모": note}])
-    return no, problems
+    """초안 한 줄을 넣는다."""
+    return add_drafts(board, [{"channel": channel, "slot": slot, "text": text, "reply": reply, "note": note}], banned)[0]
 
 
 def run_once(board, env, now=None, dry_run=False, posters=None, con=None, log=print):

@@ -62,7 +62,12 @@ class GSheetBoard:
     def __init__(self, key_file, sheet_id):
         import gspread   # 서버에만 깔면 된다
         self._gspread = gspread
-        self.sheet = gspread.service_account(filename=key_file).open_by_key(sheet_id)
+        client = gspread.service_account(filename=key_file)
+        try:
+            client.set_timeout((10, 60))   # 응답이 없으면 멈춰 있지 말고 실패한다. 멈춰 있으면 잠금을 쥔 채라 게시·수집·코드 반영이 모두 선다
+        except AttributeError:
+            pass
+        self.sheet = client.open_by_key(sheet_id)
         self._ws = {}
 
     def _tab(self, tab):

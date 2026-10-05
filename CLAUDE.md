@@ -6,7 +6,7 @@
 
 ## 먼저 읽을 것
 0. `plan/status.md` — **진행 중 항목·대기 사유·다음 행동**. 세션 시작 시 가장 먼저 읽고, 상태가 바뀌면 즉시 갱신(주간 리뷰를 기다리지 않음)
-1. `plan/decisions.md` — 확정된 결정(D1~D24). 이와 충돌하는 제안을 하기 전에 반드시 근거를 제시하고 결정 항목을 새로 추가할 것
+1. `plan/decisions.md` — 확정된 결정(D1~D25). 이와 충돌하는 제안을 하기 전에 반드시 근거를 제시하고 결정 항목을 새로 추가할 것
 2. `plan/roadmap_2026Q4.md` — 현재 주차의 할 일
 3. `docs/03_regulation_checklist.md` — 규제 제약. 모든 콘텐츠·기능 제안은 이 문서를 위반하면 안 됨
 
@@ -36,6 +36,8 @@
 ## 작업 방식
 - **마지막 검토를 한 번 더 한다.** 산출물(문서·코드·초안)을 내보내기 전에 다시 읽고, 검토에서 고친 것과 남은 불확실성을 함께 밝힌다 (Nick 요청, D17)
 - 문서는 한국어 마크다운. 결정은 `plan/decisions.md`에 날짜와 근거로 남긴다
+- SNS 초안은 `data/sns/drafts/`에 초안 파일로 올린다(D25, 형식은 `pipeline/console/drafts.py` 머리말). 올리기 전에 `python -m pipeline.console.drafts check <파일>`을 돌린다. 올리면 서버가 대기열에 '초안'으로 싣는다. 아직 일어나지 않은 일에 기대는 글에는 `- 조건:`을 적고, 나중에 채울 값은 `[채울 것: …]`으로 둔다. 지금 없는 기능을 있는 것처럼 쓰지 않는다
+- 서버에서 도는 작업을 더할 때는 `pipeline/console/jobs.py`의 작업표에 더한다(cron 줄을 늘리지 않는다). 결과는 "오늘 현황"에 한 줄로 남긴다
 - 주간 리뷰(금요일): 로드맵 체크박스 갱신 → 지표 스냅샷 `data/metrics/YYYY-WW.json` → 결정 기록
 - 코드는 Python 3.11+, 표준 라이브러리 우선. 비밀정보는 `.env`
 - 수익 가정을 바꾸면 `scripts/revenue_sim.py`를 다시 돌리고 `docs/04_revenue_model.md`의 표를 갱신한다
@@ -56,6 +58,7 @@ python -m pipeline.content.schedule_check           # 일정 체크(7일). --ton
 python -m pipeline.content.selftest                 # 일정 체크 자체 시험
 python -m pipeline.console.selftest                 # 조종판 일꾼 자체 시험 (시트·계정 안 씀)
 python -m pipeline.console.worker run --dry-run     # 조종판에서 승인된 글을 올리지 않고 미리 보기 (서버)
+python -m pipeline.console.drafts check data/sns/drafts/<file>.md   # SNS 초안 파일을 올리기 전 검사. 올리면 서버가 대기열에 '초안'으로 싣는다 (docs/15 §5-3)
 python -m pipeline.console.jobs tick                # 서버: 때가 된 예약 작업(지표 수집 등)을 돌리고 '오늘 현황'에 적는다 (cron 5분마다). plan 은 앞으로의 예정, run <작업> 은 지금 한 번
 bash scripts/server_sync.sh                         # 서버: 새 코드 받기 → 자체 시험 → 반영 또는 되돌림 (cron 10분마다)
 bash scripts/server_cron.sh                         # 서버: 예약 세 줄 맞추기 (한 번). 예약 작업의 시각은 cron 이 아니라 pipeline/console/jobs.py 가 정한다
@@ -71,5 +74,5 @@ python -m pipeline.forecast.score                   # 봉인된 예측 채점
 - `plan/` 로드맵·의사결정 (매주 갱신)
 - `pipeline/` 시그널 수집 → 통계 → 콘텐츠 생성 → 발행
 - `templates/` 뉴스레터 템플릿, disclaimer, 금지어
-- `data/` 트랙레코드 CSV, 주간 지표, 뉴스레터 초안/발행본
+- `data/` 트랙레코드 CSV, 주간 지표, 뉴스레터 초안/발행본, SNS 초안 파일(`data/sns/drafts/` — 올리면 서버가 조종판 대기열에 '초안'으로 싣는다)
 - `scripts/` 일회성 분석 스크립트

@@ -17,8 +17,10 @@ import argparse
 import csv
 import glob
 import hashlib
+import http.client
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -177,11 +179,20 @@ def record_actuals(con, schedule_glob, actuals_path, now):
         with open(path, encoding="utf-8-sig", newline="") as f:
             rows = list(csv.DictReader(f))
         for r in rows:
-            released = datetime.strptime(r["release_at_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            targets = [t for t in (r.get("targets") or "").split() if t in C.TARGET_SERIES]
+            if not targets:
+                continue   # 수집기가 없는 발표는 날짜가 비어 있어도 상관없다
+            try:
+                released = datetime.strptime(r["release_at_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                if r["event_kind"] not in T.EVENTS or not T.ref_period_ok(r["event_kind"], r["ref_period"]):
+                    raise ValueError("event_kind/ref_period")
+            except (TypeError, ValueError, KeyError):
+                notes.append("일정표에서 읽을 수 없는 줄(건너뜀): %s %s %r" % (r.get("event_kind"), r.get("ref_period"), r.get("release_at_utc")))
+                continue
             if released > now:
                 continue
-            for target in r["targets"].split():
-                if target not in C.TARGET_SERIES or (target, r["ref_period"]) in have:
+            for target in targets:
+                if (target, r["ref_period"]) in have:
                     continue
                 obs_date = ref_to_obs_date(r["event_kind"], r["ref_period"])
                 row = store.first_known(con, C.target_series_id(target), obs_date) if obs_date else None
@@ -213,8 +224,8 @@ def record_actuals(con, schedule_glob, actuals_path, now):
 
 
 def redact(text, key):
-    """문구에 키가 섞여 있으면 가린다. 잘못된 키로 요청하면 오류 문구에 그 키가 그대로 실려 올 수 있다."""
-    return str(text).replace(key, "(키 가림)") if key else str(text)
+    """문구에 키가 섞여 있으면 가린다. 잘못된 키로 요청하면 오류 문구에 그 키가 그대로 실려 올 수 있다(대소문자가 바뀌어 와도 가린다)."""
+    return re.sub(re.escape(key), "(키 가림)", str(text), flags=re.IGNORECASE) if key else str(text)
 
 
 def collect(db=None, raw_dir=None, schedule=None, actuals=None, years=5, from_file=None, dry_run=False, now=None, say=print, key=None, fetcher=None):
@@ -249,9 +260,9 @@ def collect(db=None, raw_dir=None, schedule=None, actuals=None, years=5, from_fi
                 return fail(2, "no_key", "계열이 %d개라 키 없이는 한 번에 받을 수 없습니다. https://data.bls.gov/registrationEngine/ 에서 키를 받아 .env 에 넣으세요." % len(ids))
         try:
             status, raw, url = fetcher(ids, now.year - years + 1, now.year, key)
-        except (urllib.error.URLError, OSError) as e:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
             return fail(1, "network", "노동통계국 API에 닿지 못했습니다: %s" % redact(e, key))
-    if key and key.encode("utf-8") in raw:   # 원문에도 키를 남기지 않는다
+    if key and len(key) >= 16 and not from_file and key.encode("utf-8") in raw:   # 원문에도 키를 남기지 않는다(실제 키는 32자. 짧은 값은 자료와 겹칠 수 있어 건드리지 않는다)
         raw = raw.replace(key.encode("utf-8"), "(키 가림)".encode("utf-8"))
     try:
         doc = json.loads(raw.decode("utf-8"))
@@ -278,17 +289,22 @@ def collect(db=None, raw_dir=None, schedule=None, actuals=None, years=5, from_fi
         return 0, rep
 
     con = store.connect(db)
-    os.makedirs(raw_dir, exist_ok=True)
-    raw_path = os.path.join(raw_dir, "bls_%s.json" % now.strftime("%Y%m%dT%H%M%SZ"))
-    with open(raw_path, "wb") as f:
-        f.write(raw)
-    fetch_id = store.add_fetch(con, "bls", url, known_at, status, hashlib.sha256(raw).hexdigest(), os.path.relpath(raw_path, store.ROOT))
-    got = ingest(con, parsed, known_at, fetch_id)
-    added, notes = record_actuals(con, schedule, actuals, now)
-    con.execute("INSERT INTO job_run(job_id,started_at,finished_at,status,detail) VALUES ('collect_indicators',?,?,?,?)",
-                (known_at, store.utc_now(), "ok", "new=%d revised=%d same=%d" % (got["new"], got["revised"], got["same"])))
-    con.commit()
-    con.close()
+    try:   # 도중에 멈춰도 쓰던 것을 쥔 채로 남지 않게 한다(남으면 같은 프로세스의 다음 연결이 'database is locked'로 멈춘다)
+        os.makedirs(raw_dir, exist_ok=True)
+        raw_path = os.path.join(raw_dir, "bls_%s.json" % now.strftime("%Y%m%dT%H%M%SZ"))
+        with open(raw_path, "wb") as f:
+            f.write(raw)
+        fetch_id = store.add_fetch(con, "bls", url, known_at, status, hashlib.sha256(raw).hexdigest(), os.path.relpath(raw_path, store.ROOT))
+        got = ingest(con, parsed, known_at, fetch_id)
+        added, notes = record_actuals(con, schedule, actuals, now)
+        con.execute("INSERT INTO job_run(job_id,started_at,finished_at,status,detail) VALUES ('collect_indicators',?,?,?,?)",
+                    (known_at, store.utc_now(), "ok", "new=%d revised=%d same=%d" % (got["new"], got["revised"], got["same"])))
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    finally:
+        con.close()
     for k in ("new", "revised", "same", "unknown", "mismatch", "missing", "calc_diff"):
         rep[k] = got[k]
     rep.update({"ok": True, "added": added, "notes": notes, "raw_path": raw_path,

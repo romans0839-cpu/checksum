@@ -14,6 +14,7 @@ from ..collect.selftest import fake_response
 from ..publish import threads as threads_api
 from ..publish import x as x_api
 from . import board as B
+from . import drafts as D
 from . import jobs as J
 from . import worker as W
 
@@ -153,7 +154,8 @@ def main():
             srs["data"] = [d for d in srs["data"] if not (d["year"] == "2098" and d["period"] == "M12")]
         with open(early, "w", encoding="utf-8") as f:
             json.dump(doc, f)
-        opts = {"db": os.path.join(tmp, "j.db"), "raw_dir": os.path.join(tmp, "raw"), "schedule": sched, "actuals": os.path.join(tmp, "actuals.csv"), "from_file": early}
+        opts = {"db": os.path.join(tmp, "j.db"), "raw_dir": os.path.join(tmp, "raw"), "schedule": sched, "actuals": os.path.join(tmp, "actuals.csv"), "from_file": early,
+                "drafts": os.path.join(tmp, "no_drafts", "*.md")}
         t0 = datetime(2099, 1, 14, 13, 32, tzinfo=timezone.utc)   # 발표 2분 뒤
         jlog = []
         kw = dict(board_opener=lambda: board, log=jlog.append)
@@ -226,6 +228,134 @@ def main():
         res, memo = J.indicator_summary(dict(blank, ok=True, new=5, newest=(2098, 12), mismatch=["CUSR0000SETG01 (항공료): Airline fares in U.S. city average"], missing=["WPSFD41"], unknown=2))
         check("요약: 고칠 때 필요한 내용(제목 불일치, 오지 않은 계열)을 그대로", res.startswith("주의 2건 · 새 값 5") and any("Airline fares" in m for m in memo) and any("WPSFD41" in m for m in memo)
               and any("대조하지 못한 계열 2개" in m for m in memo), (res, memo))
+
+        # 일정표에 읽을 수 없는 줄·겹친 줄이 있어도 일꾼은 돈다
+        messy = os.path.join(tmp, "schedule_messy.csv")
+        with open(messy, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["event_kind", "title_ko", "ref_period", "release_et", "release_kst", "release_at_utc", "tier", "targets", "source_url", "checked"])
+            w.writerow(["CPI", "소비자물가", "2098-12", "", "", "2099-01-14T13:30:00Z", 1, "CPI_MOM CPI_CORE_MOM CPI_YOY", "u", 1])
+            w.writerow(["CPI", "소비자물가", "2098-12", "", "", "2099-01-14T13:30:00Z", 1, "CPI_MOM CPI_CORE_MOM CPI_YOY", "u", 1])
+            w.writerow(["GDP_ADV", "GDP 속보치", "2098Q4", "", "", "", 1, "GDP_ADV_QOQ", "u", 1])
+            w.writerow(["PPI", "생산자물가", "2098-12", "", "", "2099-01-15T13:30Z", 2, "PPI_FD_MOM", "u", 1])
+            w.writerow(["CPI", "소비자물가", "2099-01"])
+        o6 = dict(opts, db=os.path.join(tmp, "j6.db"), raw_dir=os.path.join(tmp, "raw6"), schedule=messy, actuals=os.path.join(tmp, "a6.csv"), from_file=full)
+        ids = [s.id for s in J.indicator_slots(t0, o6)]
+        jlog.clear()
+        ran = J.tick(now=t0, opts=o6, **kw)
+        row = {r["항목"]: r for r in board.read(B.STATUS)}["지표 수집"]
+        check("일정표의 읽을 수 없는 줄은 건너뛰고 알림, 겹친 줄은 예정 하나", ids.count("release:CPI:2098-12") == 1 and not any("PPI" in i for i in ids) and len(ran) == 1 and ran[0][2]["ok"]
+              and ran[0][2]["done"] == {"daily:2099-01-14", "release:CPI:2098-12"} and row["메모"].count("읽을 수 없는 줄") == 1 and "PPI 2098-12" in row["메모"] and J.tick(now=t0 + timedelta(minutes=10), opts=o6, **kw) == [], (ids, ran, row))
+
+        def leaky(**k):
+            raise RuntimeError("request failed: registrationkey=SECRETKEY0123456789")
+        jlog.clear()
+        J.tick(now=t1, opts=dict(opts, db=os.path.join(tmp, "j7.db"), collect=leaky, secrets=J.secrets_of({"BLS_API_KEY": "SECRETKEY0123456789", "CONSOLE_SHEET_ID": "sheet-id-0123456789"})), **kw)
+        row = {r["항목"]: r for r in board.read(B.STATUS)}["지표 수집"]
+        check("오류 문구에 서버의 키가 섞여도 조종판·기록·로그에는 가려서", "도중에 멈춤" in row["결과"] and "(가림)" in row["결과"] and "SECRETKEY" not in str(row) + " ".join(jlog)
+              and J.secrets_of({"CONSOLE_SHEET_ID": "sheet-id-0123456789", "X": "short"}) == [], (row, jlog))
+
+    # --- 채우지 않은 칸: 휴대폰에서 고치다 괄호가 한쪽만 남아도 막는다
+    bn = W.banned_terms()
+    left = ["전월비 [채울 것: CPI 전월비]%", "전월비 [채울 것: CPI 전월비 %", "전월비 채울 것: CPI 전월비]%", "전월비 ［채울 것： CPI］%", "전월비 [채울것: CPI]%",
+            "전월비 (채울 것: CPI)%", "전월비 [ 채울 것: CPI ]%", "전월비 [채\u200b울 것: CPI]%"]
+    check("채우지 않은 칸의 변형을 모두 막고, 평범한 문장은 막지 않음", all(any("채우지 않은 칸" in x for x in W.check_text(B.CH_THREADS, t, "", bn)) for t in left)
+          and any("채우지 않은 칸" in x for x in W.check_text(B.CH_X, "짧은 글", "", bn) + W.check_text(B.CH_THREADS, "글", "구독: [채울 것: 주소", bn))
+          and not W.check_text(B.CH_THREADS, "빈칸은 제가 채울 것입니다. 숫자는 그대로 적겠습니다.", "", bn),
+          [t for t in left if not W.check_text(B.CH_THREADS, t, "", bn)])
+
+    # --- 초안 싣기: 저장소의 초안 파일 -> 대기열 ('초안'으로만)
+    sample = """# 설명은 읽지 않는다
+## 이 줄도 아님? 아니다, 이름 규칙에 걸린다
+"""
+    _, bad = D.parse(sample)
+    check("초안 파일: 이름 규칙과 빈 초안을 잡음", any("초안 이름" in b for b in bad) and any("본문이 없음" in b for b in bad), bad)
+    _, bad1 = D.parse("## a-1\n### 스레드\n글\n---\n<!-- 검토 메모 -->\n")
+    _, bad2 = D.parse("##a-1\n### 스레드\n글\n")
+    check("초안 파일: 본문에 섞인 구분선·주석 줄, 초안이 하나도 없는 파일을 잡음", sum("구분선이나 주석" in b for b in bad1) == 2 and any("하나도 없음" in b for b in bad2), (bad1, bad2))
+    good = """설명 줄.
+
+## 설명 안의 제목은 초안이 아니다
+- 예약: 아무 말
+
+<!-- 초안 시작 -->
+
+## a-1009-0630
+- 예약: 2099-01-05 06:30
+- 줄기: 소개
+- 조건: 없음
+
+### 스레드
+첫 글입니다.
+
+둘째 문단.
+
+### 스레드 답글
+구독: https://example.com/s
+
+### X
+X용 짧은 글
+
+## a-1009-1200
+- 줄기: 일정
+- 조건: 발표가 나온 뒤
+
+### 스레드
+전월비 [채울 것: CPI 전월비]%
+"""
+    drafts, bad = D.parse(good)
+    check("초안 파일 읽기: 예약·줄기·조건, 본문의 빈 줄 보존, 채널별 칸", not bad and len(drafts) == 2 and drafts[0]["threads"] == "첫 글입니다.\n\n둘째 문단."
+          and drafts[0]["reply"].startswith("구독") and drafts[0]["x"] == "X용 짧은 글" and drafts[0]["cond"] == "" and drafts[1]["cond"] == "발표가 나온 뒤" and drafts[1]["slot"] == "", (bad, drafts))
+    with tempfile.TemporaryDirectory() as tmp:
+        board = B.CsvBoard(os.path.join(tmp, "board"))
+        for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
+            board.ensure(tab)
+        os.makedirs(os.path.join(tmp, "drafts"))
+        with open(os.path.join(tmp, "drafts", "first.md"), "w", encoding="utf-8") as f:
+            f.write(good)
+        with open(os.path.join(tmp, "drafts", "broken.md"), "w", encoding="utf-8") as f:
+            f.write("## b-1\n- 예약: 내일 아침\n\n### 스레드\n글\n")
+        W.add_draft(board, B.CH_THREADS, "", "이미 있던 줄", banned=W.banned_terms())
+        opts = {"db": os.path.join(tmp, "d.db"), "drafts": os.path.join(tmp, "drafts", "*.md"), "schedule": os.path.join(tmp, "none_*.csv")}
+        t0 = datetime(2099, 1, 4, 22, 2, tzinfo=timezone.utc)
+        jlog = []
+        only = [j for j in J.JOBS if j.id == "load_drafts"]
+        ran = J.tick(now=t0, opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append)
+        q = board.read(B.QUEUE)
+        st = {r["항목"]: r for r in board.read(B.STATUS)}.get("초안 싣기", {})
+        check("초안 싣기: 채널마다 한 줄, 번호를 이어서, 메모에 이름과 조건", len(ran) == 1 and [(r["번호"], r["채널"], r["예약(KST)"]) for r in q[1:]] ==
+              [("2", "스레드", "2099-01-05 06:30"), ("3", "X", "2099-01-05 06:30"), ("4", "스레드", "")] and q[1]["셀프 답글"].startswith("구독")
+              and q[1]["메모"] == "a-1009-0630 · 소개" and "조건: 발표가 나온 뒤" in q[3]["메모"] and q[1]["처음 문안"] == q[1]["본문"], q)
+        check("실은 초안은 전부 '초안' 상태이고, 채우지 않은 칸은 검사에 적힘", all(r["상태"] == B.ST_DRAFT for r in q) and "채우지 않은 칸" in q[3]["검사"] and q[1]["검사"] == "이상 없음", [(r["상태"], r["검사"]) for r in q])
+        check("오늘 현황: 실은 수와 형식이 틀린 파일", st.get("결과", "").startswith("주의 1건 · 초안 3줄") and "예약 시각 형식" in st.get("메모", "") and "4번(a-1009-1200)" in st["메모"], st)
+        made = []
+        res = W.run_once(board, {}, now=datetime(2099, 2, 1, tzinfo=timezone.utc), posters={B.CH_THREADS: lambda *a, **k: made.append(a) or ("1", "u"), B.CH_X: lambda *a, **k: made.append(a) or ("1", "u")}, log=jlog.append)
+        check("승인하지 않은 초안은 예약 시각이 지나도 올라가지 않음", not made and res[0] == 0, (res, made))
+        check("다시 돌려도 두 번 싣지 않음", J.tick(now=t0 + timedelta(minutes=5), opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append) == [] and len(board.read(B.QUEUE)) == 4)
+        board.update(B.QUEUE, q[3]["_row"], {"상태": B.ST_OK})
+        res = W.run_once(board, {}, now=datetime(2099, 2, 1, tzinfo=timezone.utc), posters={B.CH_THREADS: lambda *a, **k: made.append(a) or ("1", "u")}, log=jlog.append)
+        check("채우지 않은 칸이 있는 글은 승인해도 막힘", not made and board.read(B.QUEUE)[3]["상태"] == B.ST_BLOCKED and "채우지 않은 칸" in board.read(B.QUEUE)[3]["검사"], board.read(B.QUEUE)[3])
+        with open(os.path.join(tmp, "drafts", "second.md"), "w", encoding="utf-8") as f:
+            f.write("## c-1\n### 스레드\n새 글\n")
+
+        def no_board():
+            raise SystemExit("[중단] 조종판 시트를 열 수 없습니다: 권한")
+        t1 = t0 + timedelta(minutes=10)
+        J.tick(now=t1, opts=opts, jobs=only, board_opener=no_board, log=jlog.append)
+        again = J.tick(now=t1 + timedelta(minutes=5), opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append)
+        later = J.tick(now=t1 + timedelta(minutes=30), opts=opts, jobs=only, board_opener=lambda: board, log=jlog.append)
+        check("조종판을 못 열면 싣지 않고 30분 뒤 다시 시도", again == [] and len(later) == 1 and board.read(B.QUEUE)[-1]["본문"] == "새 글" and len(board.read(B.QUEUE)) == 5, (again, later))
+        fresh_db = dict(opts, db=os.path.join(tmp, "d2.db"))   # DB를 잃어버린 경우: 시트에 이미 있는 줄은 다시 넣지 않는다
+        ran = J.tick(now=t1 + timedelta(hours=2), opts=fresh_db, jobs=only, board_opener=lambda: board, log=jlog.append)
+        check("실었다는 기록을 잃어도 시트에 있는 초안은 두 번 싣지 않음", len(ran) == 1 and "초안 0줄" in ran[0][2]["result"] and len(board.read(B.QUEUE)) == 5, (ran, len(board.read(B.QUEUE))))
+        os.makedirs(os.path.join(tmp, "only_bad"))
+        with open(os.path.join(tmp, "only_bad", "x.md"), "w", encoding="utf-8") as f:
+            f.write("## b-1\n- 예약: 내일 아침\n\n### 스레드\n글\n")
+        ob = {"db": os.path.join(tmp, "d3.db"), "drafts": os.path.join(tmp, "only_bad", "*.md")}
+        first = J.tick(now=t1, opts=ob, jobs=only, board_opener=lambda: board, log=jlog.append)
+        st = {r["항목"]: r for r in board.read(B.STATUS)}["초안 싣기"]
+        check("형식이 틀린 파일만 있어도 한 번은 알리고, 같은 문제를 되풀이해 알리지 않음", len(first) == 1 and st["결과"].startswith("주의 1건") and "예약 시각 형식" in st["메모"]
+              and J.tick(now=t1 + timedelta(minutes=40), opts=ob, jobs=only, board_opener=lambda: board, log=jlog.append) == [], (first, st))
 
     class FakeApi(Exception):
         pass
