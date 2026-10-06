@@ -36,6 +36,8 @@ def main():
                      "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE")
     check("X 서명: 공식 문서의 예제 값과 일치", sig == "hCtSmYh+iHYCEqBWrE7C7hYmtUk=", sig)
     check("X 길이: 한글 140자 = 280, 링크 = 23", x_api.weighted_length("가" * 140) == 280 and x_api.weighted_length("a https://example.com/" + "b" * 60) == 25)
+    check("X 한도: 긴 글이 켜져 있으면 25,000, 아니면 280", (x_api.BASIC_WEIGHT, x_api.LONG_WEIGHT) == (280, 25000)
+          and x_api.MAX_WEIGHT == (x_api.LONG_WEIGHT if x_api.LONG_POSTS else x_api.BASIC_WEIGHT), x_api.MAX_WEIGHT)
     sent = {}
 
     def fake_send(body, header):
@@ -71,7 +73,7 @@ def main():
         n3, _ = W.add_draft(board, B.CH_THREADS, "2099-01-06 06:30", "내일 글", banned=banned)
         n4, p4 = W.add_draft(board, B.CH_THREADS, "", "이건 무조건 오릅니다", banned=banned)
         n5, p5 = W.add_draft(board, B.CH_THREADS, "", "본문에 링크 https://example.com/x", banned=banned)
-        n6, p6 = W.add_draft(board, B.CH_X, "", "가" * 141, banned=banned)
+        n6, p6 = W.add_draft(board, B.CH_X, "", "가" * (x_api.MAX_WEIGHT // 2 + 1), banned=banned)   # 한도를 한 글자 넘긴 글
         n7, _ = W.add_draft(board, B.CH_THREADS, "", "승인하지 않은 글", banned=banned)
         n8, _ = W.add_draft(board, B.CH_THREADS, "", "서버가 받아 주지 않는 글", banned=banned)
         check("초안을 넣을 때 검사 결과를 미리 적음", (n1, n4) == ("1", "4") and any("금지어" in x for x in p4) and any("링크" in x for x in p5) and any("X 길이" in x for x in p6), (p4, p5, p6))

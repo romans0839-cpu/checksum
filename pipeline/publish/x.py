@@ -3,7 +3,8 @@
     python -m pipeline.publish.x whoami      .env 의 키 4개가 맞는지, 어느 계정 것인지 확인한다 (글을 올리지 않는다)
 
 .env: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET (개발자 화면의 Keys and tokens, 쓰기 권한 필요)
-한도: 기본 계정은 가중 길이 280 (한글 한 글자 = 2, 링크 = 23). 종량제: 글마다 요금이 붙고 링크가 든 글은 훨씬 비싸다.
+한도: 무료 계정은 가중 길이 280 (한글 한 글자 = 2, 링크 = 23). 유료 구독 계정은 긴 글(X 안내로는 25,000자)을 올릴 수 있다 — 아래 LONG_POSTS (D30).
+종량제: 글마다 요금이 붙고 링크가 든 글은 훨씬 비싸다.
 키와 서명은 화면·로그·오류 문구에 찍지 않는다.
 """
 import base64
@@ -18,7 +19,10 @@ import urllib.parse
 import urllib.request
 
 URL = "https://api.x.com/2/tweets"
-MAX_WEIGHT = 280
+BASIC_WEIGHT = 280     # 무료 계정
+LONG_WEIGHT = 25000    # 유료 구독 계정의 긴 글. X 는 25,000자라고 적는데 여기서는 가중 길이로 재므로 그보다 넉넉히 안쪽이다
+LONG_POSTS = True      # D30: @checksumlab 은 2026-10-06 부터 유료 구독(Premium)이다. 구독을 끊으면 False 로 — 안 그러면 긴 글이 X 에서 거절된다
+MAX_WEIGHT = LONG_WEIGHT if LONG_POSTS else BASIC_WEIGHT
 _LIGHT = ((0x0000, 0x10FF), (0x2000, 0x200D), (0x2010, 0x201F), (0x2032, 0x2037))
 
 
