@@ -167,6 +167,40 @@ X용 문안: 초안을 만들 때 두 줄(스레드용, X용)이 함께 대기�
 - 같은 공유 덕분에 세션이 "오늘 현황"도 읽을 수 있다. 코드를 올린 뒤 "코드 반영" 줄과 각 작업의 줄로 서버의 결과를 확인한다(D24의 남는 위험 ③이 줄었다).
 - 말투 지침에 반영하는 때: 초안을 쓸 때마다 훑고, 금요일 주간 리뷰에서 그 주의 고침을 모아 `templates/voice_guide.md` §2를 고친다.
 
+## 5-5. 장부를 서버로 옮기는 순서 (10/9)
+
+장부는 10/6 첫 봉인 때 PC에서 만들어져 PC에만 있었다. Nick 출장(10/13~15) 전에 서버로 옮긴다. **옮긴 뒤로는 서버 한 곳에서만 쓴다 — PC의 `ledger_commit.bat`은 다시 돌리지 않는다.**
+
+옮기는 것 셋:
+- `data/ledger/public/` — 공개 장부(`ledger.jsonl`)와 봉인 파일(`seals/`, `.ots`)
+- `data/private/ledger/` — 원문과 nonce. 잃으면 원문 공개(대조)를 할 수 없다
+- `data/track_record/signals.csv` — PC에는 10/6 후보 6줄이 더해져 저장소의 파일과 다르다
+
+① PC(PowerShell)에서 묶어서 보낸다. 묶음 파일은 저장소 폴더 밖에 만든다.
+```
+tar -czf "$env:USERPROFILE\ledger_move.tgz" -C C:\usstock-sub data/ledger/public data/private/ledger data/track_record/signals.csv
+tar -tzf "$env:USERPROFILE\ledger_move.tgz"
+scp "$env:USERPROFILE\ledger_move.tgz" <평소 접속하는 계정>@<서버>:/tmp/
+```
+② 서버의 `checksum` 계정에서 푼다. 첫 줄에서 두 폴더가 이미 있다고 나오면 멈춘다(덮어쓰지 않는다).
+```
+cd ~/checksum
+ls data/ledger/public data/private/ledger
+mkdir -p ~/ledger_in && tar -xzf /tmp/ledger_move.tgz -C ~/ledger_in
+mkdir -p data/ledger data/private
+cp -r ~/ledger_in/data/ledger/public data/ledger/
+cp -r ~/ledger_in/data/private/ledger data/private/
+chmod -R go-rwx data/private ~/ledger_in
+~/venv/bin/python -m pipeline.ledger.verify
+```
+"이상 없음. 마지막 해시 …"가 PC에서 본 것과 같으면 끝이다(10/6 첫 봉인 뒤의 마지막 해시는 `6e1e6a6fd97db1c2…`). `/tmp/ledger_move.tgz`는 보낸 계정으로 지운다. `~/ledger_in`은 받은 그대로의 사본으로 남겨 둔다.
+
+정해 둔 것과 남은 것:
+- `data/ledger/public/`은 서버에서 git이 모르는 파일로 놓인다. 저장소에 같은 경로를 올리지 않는 한 코드 반영(§5-1)에 걸리지 않는다.
+- `signals.csv`는 아직 제자리에 넣지 않았다(`~/ledger_in`에만 있다). 서버가 추적 중인 파일을 고치면 코드 반영이 멈출 수 있어서다. 서버의 봉인 작업을 만들 때 이 파일의 자리를 정한다 — `data/forecast/actuals.csv`처럼 저장소에서 빼고 서버 한 곳에서만 쓰는 쪽이 후보다. 그때 PC의 같은 파일은 `git checkout`으로 되돌린 뒤 `sync.bat`을 돌린다.
+- 서버의 봉인 작업(봇 저장소에서 그 주 신호 파일을 받아 `pipeline.ledger.commit` → `verify` → "오늘 현황" 한 줄)은 주말에 만든다. 봇 폴더의 자리는 `CHECKSUM_BOT_DIR`(기본은 `~/us_swing_bot`)이다.
+- 백업: 지금은 PC의 원래 폴더가 백업이다. 서버에서 새 기록이 생기기 시작하면 서버 밖으로 나가는 백업이 필요하다(0-1).
+
 ## 6. Nick이 한 번 해 줄 설정 (합쳐서 1시간쯤, 나눠서 해도 된다)
 
 화면이 아래 설명과 다르면 캡처를 보내면 된다. 키와 토큰 값은 채팅에 붙여 넣지 않는다.
