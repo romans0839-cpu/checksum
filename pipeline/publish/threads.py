@@ -3,6 +3,7 @@
     python -m pipeline.publish.threads whoami      .env 의 토큰이 어느 계정 것인지 확인하고 THREADS_USER_ID 를 .env 에 적는다
     python -m pipeline.publish.threads exchange    1시간짜리 토큰을 60일짜리로 바꿔 .env 에 다시 적는다 (THREADS_APP_SECRET 필요)
     python -m pipeline.publish.threads refresh     토큰을 60일 더 쓰게 갱신해 .env 에 다시 적는다 (월 1회)
+    python -m pipeline.publish.threads check       글을 올리지 않고 계정과 게시 권한을 확인한다 (서버에서는 예약 작업 '스레드 점검'이 돌린다)
 
 글 하나 = 두 번의 요청: 그릇을 만들고(/threads) → 게시한다(/threads_publish). 답글은 reply_to_id 로 단다.
 토큰은 요청 본문에만 넣고 화면·로그·오류 문구에 찍지 않는다. 한도: 500자, 하루 250건.
@@ -61,6 +62,27 @@ def post(text, env, reply_to=None, wait=15, call=_call, sleep=time.sleep):
     except PostError:
         pass   # 글은 올라갔다. 링크만 못 받은 것
     return done["id"], link
+
+
+def check(env, call=_call):
+    """글을 올리지 않고 토큰과 게시 권한을 확인한다. 읽기 요청 두 번(계정, 게시 한도)이며 .env 를 고치지 않는다.
+    (계정 이름, 계정 ID, 최근 24시간 게시 수 또는 None, 하루 한도 또는 None). 어느 단계에서 멈췄는지를 오류 문구에 적는다."""
+    token = env.get("THREADS_ACCESS_TOKEN")
+    if not token:
+        raise PostError(".env 에 THREADS_ACCESS_TOKEN 이 없습니다")
+    try:
+        me = call("GET", "%s/v1.0/me?%s" % (HOST, urllib.parse.urlencode({"fields": "id,username", "access_token": token})))
+    except PostError as e:
+        raise PostError("계정 확인에서 멈춤 — %s" % e)
+    if not me.get("id"):
+        raise PostError("계정 확인 응답에 ID가 없습니다")
+    name, uid = me.get("username", ""), str(me["id"])
+    try:
+        lim = call("GET", "%s/v1.0/%s/threads_publishing_limit?%s" % (HOST, uid, urllib.parse.urlencode({"fields": "quota_usage,config", "access_token": token})))
+    except PostError as e:
+        raise PostError("게시 권한 확인에서 멈춤(@%s) — %s" % (name, e))
+    row = (lim.get("data") or [{}])[0] or {}
+    return name, uid, row.get("quota_usage"), (row.get("config") or {}).get("quota_total")
 
 
 def _set_env(env_path, key, value):
@@ -129,6 +151,10 @@ if __name__ == "__main__":
         elif sys.argv[1:] == ["whoami"]:
             name, uid = whoami(path)
             print("계정 @%s (ID %s). THREADS_USER_ID 를 .env 에 적었습니다." % (name, uid))
+        elif sys.argv[1:] == ["check"]:
+            from ..collect import env as envmod
+            name, uid, used, total = check(envmod.load(path))
+            print("정상. 계정 @%s, 최근 24시간 게시 %s / 한도 %s" % (name, used, total))
         else:
             print(__doc__)
     except PostError as e:

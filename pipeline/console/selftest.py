@@ -415,6 +415,59 @@ X용 짧은 글
             guarded = True
         check("게시 대기열은 통째로 바꿀 수 없음", guarded and len(board.read(B.QUEUE)) == 3)
 
+    # --- 스레드 점검: 글을 올리지 않는 확인과 막힌 줄
+    seen = []
+
+    def ok_call(method, url, data=None, timeout=30):
+        seen.append((method, url.split("?")[0].rsplit("/", 1)[-1], data))
+        if url.split("?")[0].endswith("/me"):
+            return {"id": "u1", "username": "checksumlab"}
+        return {"data": [{"quota_usage": 3, "config": {"quota_total": 250, "quota_duration": 86400}}]}
+
+    def blocked_call(method, url, data=None, timeout=30):
+        if url.split("?")[0].endswith("/me"):
+            return {"id": "u1", "username": "checksumlab"}
+        raise threads_api.PostError("스레드 API 오류 400: API access blocked.")
+    got = threads_api.check(env, call=ok_call)
+    try:
+        threads_api.check(env, call=blocked_call)
+        where = ""
+    except threads_api.PostError as e:
+        where = str(e)
+    check("스레드 점검: 읽기 요청 두 번, 글은 만들지 않음", got == ("checksumlab", "u1", 3, 250) and [c[:2] for c in seen] == [("GET", "me"), ("GET", "threads_publishing_limit")]
+          and all(c[2] is None for c in seen) and where.startswith("게시 권한 확인에서 멈춤(@checksumlab)") and "API access blocked" in where and "tok-secret" not in where, (got, seen, where))
+    with tempfile.TemporaryDirectory() as tmp:
+        board = B.CsvBoard(os.path.join(tmp, "board"))
+        for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
+            board.ensure(tab)
+        W.add_drafts(board, [{"channel": B.CH_THREADS, "slot": "", "text": "막혔던 글입니다.", "note": "s-roe · 예비"},
+                             {"channel": B.CH_X, "slot": "2099-01-06 06:30", "text": "기다리는 글입니다.", "note": "b-1 · 일정"}], W.banned_terms())
+        q = board.read(B.QUEUE)
+        board.update(B.QUEUE, q[0]["_row"], {"상태": B.ST_BLOCKED, "검사": "스레드 API 오류 400: API access blocked."})
+        board.update(B.QUEUE, q[1]["_row"], {"상태": B.ST_OK})
+        only = [j for j in J.JOBS if j.id == "check_channels"]
+        t0 = datetime(2099, 1, 5, 21, 0, tzinfo=timezone.utc)   # 한국 시간 1/6 06:00
+        jlog = []
+        ids = [s.id for s in J.channel_slots(t0, {})]
+        o1 = {"db": os.path.join(tmp, "c.db"), "env": env, "threads_check": lambda e: threads_api.check(e, call=ok_call)}
+        ran = J.tick(now=t0, opts=o1, jobs=only, board_opener=lambda: board, log=jlog.append)
+        st = {r["항목"]: r for r in board.read(B.STATUS)}.get("스레드 점검", {})
+        check("스레드 점검 작업: 하루 두 번, 정상이면 한도와 막힌 줄을 적음", "check:2099-01-06:0600" in ids and "check:2099-01-06:2030" in ids and len(ids) == 2 * (J.PLAN_DAYS + 2)
+              and len(ran) == 1 and ran[0][2]["ok"] and st.get("결과") == "정상 · @checksumlab · 최근 24시간 게시 3/250 · 막힌 줄 1"
+              and "s-roe(스레드): 스레드 API 오류 400: API access blocked." in st.get("메모", "") and "b-1" not in st.get("메모", "")
+              and J.tick(now=t0 + timedelta(minutes=5), opts=o1, jobs=only, board_opener=lambda: board, log=jlog.append) == [], (ids[:4], ran, st))
+        o2 = {"db": os.path.join(tmp, "c2.db"), "env": env, "threads_check": lambda e: threads_api.check(e, call=blocked_call), "secrets": J.secrets_of(env)}
+        ran = J.tick(now=t0, opts=o2, jobs=only, board_opener=lambda: board, log=jlog.append)
+        st = {r["항목"]: r for r in board.read(B.STATUS)}["스레드 점검"]
+        soon = J.tick(now=t0 + timedelta(minutes=5), opts=o2, jobs=only, board_opener=lambda: board, log=jlog.append)
+        again = J.tick(now=t0 + timedelta(minutes=30), opts=o2, jobs=only, board_opener=lambda: board, log=jlog.append)
+        third = J.tick(now=t0 + timedelta(minutes=60), opts=o2, jobs=only, board_opener=lambda: board, log=jlog.append)
+        check("스레드 점검 작업: 막혀 있으면 실패로 적고 30분 뒤 한 번만 더 본다", len(ran) == 1 and not ran[0][2]["ok"] and st["결과"].startswith("실패: 스레드 게시 권한 확인에서 멈춤(@checksumlab)")
+              and "API access blocked" in st["결과"] and st["결과"].endswith("막힌 줄 1") and "X 줄은 따로" in st["메모"] and "30분 뒤 다시 시도 (1/2)" in st["메모"]
+              and soon == [] and len(again) == 1 and third == [] and "tok-secret" not in json.dumps(board.read(B.STATUS), ensure_ascii=False), (ran, st, soon, again, third))
+        ran = J.tick(now=t0, opts=dict(o1, db=os.path.join(tmp, "c3.db")), jobs=only, board_opener=no_board, log=jlog.append)
+        check("스레드 점검 작업: 조종판을 못 열어도 토큰 확인은 한다", len(ran) == 1 and ran[0][2]["ok"] and "게시 대기열을 읽지 못함" in " ".join(ran[0][2]["memo"]), ran)
+
     class FakeApi(Exception):
         pass
     try:

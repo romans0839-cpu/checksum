@@ -18,6 +18,8 @@
 - collect_indicators (지표 수집): 매일 07:10 + 노동통계국 발표 2분 뒤. 발표 직후에는 발표값이 올 때까지 10분마다 다시 받는다.
 - load_drafts (초안 싣기): 저장소에 새 SNS 초안(data/sns/drafts/*.md)이 올라오면 조종판 게시 대기열에 '초안'으로 싣는다. 승인은 사람만 한다.
 - log_edits (고친 기록): 한 시간에 한 번, 승인·게시된 줄에서 Nick이 고친 문장을 모아 '고친 기록' 탭에 적는다. 새로 고친 것이 없으면 아무것도 적지 않는다.
+- check_channels (스레드 점검): 매일 06:00(아침 글 30분 전)과 20:30. 글을 올리지 않고 스레드 토큰과 게시 권한을 확인하고,
+  게시 대기열에 '막힘'으로 남아 있는 줄을 함께 적는다. 게시 일꾼의 "막힘 N"은 그 바퀴에 새로 막힌 수라서, 남아 있는 막힌 줄은 여기서 본다.
 """
 import argparse
 import csv
@@ -33,6 +35,7 @@ from ..collect import catalog as C
 from ..collect import env as envmod
 from ..collect import store
 from ..forecast import targets as T
+from ..publish import threads as threads_api
 from . import board as B
 from . import drafts as D
 from . import edits as E
@@ -223,9 +226,60 @@ def run_edits(now, due, opts):
             "quiet": not (new or first)}
 
 
+# --- 스레드 점검: 글을 올리지 않고 토큰·게시 권한을 확인하고, 대기열에 남은 막힌 줄을 적는다
+
+CHECK_TIMES = ((6, 0, "아침 글 전 점검"), (20, 30, "밤 점검"))   # 한국 시간. 아침 글은 06:30, 밤 승인은 21시쯤
+
+
+def channel_slots(now, opts):
+    """하루 두 번. 놓치면 3시간 안에만 돌리고, 실패하면 30분 뒤 한 번 더 본다."""
+    out = []
+    today = now.astimezone(KST).date()
+    for i in range(-1, PLAN_DAYS + 1):
+        d = today + timedelta(days=i)
+        for hh, mm, label in CHECK_TIMES:
+            at = datetime(d.year, d.month, d.day, hh, mm, tzinfo=KST).astimezone(timezone.utc)
+            out.append(Slot("check:%s:%02d%02d" % (d.isoformat(), hh, mm), at, at + timedelta(hours=3), 30, 2, label, None))
+    return out
+
+
+def blocked_rows(board):
+    """게시 대기열에 '막힘'으로 남아 있는 줄을 한 줄씩: 번호, 초안 이름, 채널, 이유."""
+    out = []
+    for r in board.read(B.QUEUE):
+        if (r.get("상태") or "").strip() == B.ST_BLOCKED:
+            name = (r.get("메모") or "").split(" · ")[0].strip()[:30]
+            out.append("%s번 %s(%s): %s" % (r.get("번호"), name or "이름 없음", (r.get("채널") or "").strip(), (r.get("검사") or "").strip()[:120]))
+    return out
+
+
+def run_channels(now, due, opts):
+    env = opts.get("env")
+    if env is None:
+        env = envmod.load()
+    memo, blocked = [], []
+    try:
+        blocked = blocked_rows(opts["board_opener"]())
+    except (Exception, SystemExit) as e:
+        memo.append("[알림] 게시 대기열을 읽지 못함: %s" % str(e)[:120])
+    if blocked:
+        memo.append("막힌 줄 %d개(고친 뒤 상태를 다시 '승인'으로 바꿔야 올라갑니다): %s" % (len(blocked), " | ".join(blocked)[:1500]))
+    tail = " · 막힌 줄 %d" % len(blocked) if blocked else ""
+    try:
+        name, uid, used, total = (opts.get("threads_check") or threads_api.check)(env)
+    except threads_api.PostError as e:
+        memo.insert(0, "이 상태에서는 스레드 글이 올라가지 않고 그 줄이 '막힘'이 됩니다. X 줄은 따로 올라갑니다")
+        return {"ok": False, "result": "실패: 스레드 %s%s" % (str(e)[:200], tail), "memo": memo, "done": set(), "lines": []}
+    if env.get("THREADS_USER_ID") and env.get("THREADS_USER_ID") != uid:
+        memo.insert(0, "[주의] .env 의 THREADS_USER_ID 가 토큰의 계정과 다릅니다. 서버에서 whoami 를 한 번 돌리면 맞춰집니다")
+    quota = "최근 24시간 게시 %s/%s" % (used, total) if used is not None and total is not None else "게시 한도 값 없음"
+    return {"ok": True, "result": "정상 · @%s · %s%s" % (name, quota, tail), "memo": memo, "done": {s.id for s in due}, "lines": []}
+
+
 JOBS = [Job("collect_indicators", "지표 수집", indicator_slots, run_indicators),
         Job("load_drafts", "초안 싣기", draft_slots, run_drafts),
-        Job("log_edits", "고친 기록", edit_slots, run_edits)]
+        Job("log_edits", "고친 기록", edit_slots, run_edits),
+        Job("check_channels", "스레드 점검", channel_slots, run_channels)]
 
 
 # --- 일꾼
