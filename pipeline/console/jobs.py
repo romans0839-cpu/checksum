@@ -18,14 +18,21 @@
 - collect_indicators (지표 수집): 매일 07:10 + 노동통계국 발표 2분 뒤. 발표 직후에는 발표값이 올 때까지 10분마다 다시 받는다.
 - load_drafts (초안 싣기): 저장소에 새 SNS 초안(data/sns/drafts/*.md)이 올라오면 조종판 게시 대기열에 '초안'으로 싣는다. 승인은 사람만 한다.
 - log_edits (고친 기록): 한 시간에 한 번, 승인·게시된 줄에서 Nick이 고친 문장을 모아 '고친 기록' 탭에 적는다. 새로 고친 것이 없으면 아무것도 적지 않는다.
+- pull_bot_signal (장부 봉인): 화요일 09:40부터 23:15까지, 그 주 봇 신호 파일이 봇 저장소 사본에 올라올 때까지 30분마다 보고
+  올라오면 장부에 봉인한다(봇 집행 23:31 전). 다른 날에는 하루 한 번 장부가 그대로인지만 본다. 빈 장부에는 아무것도 쓰지 않는다.
+  종목 이름은 조종판과 로그에 적지 않는다(건수와 해시만).
 - check_channels (스레드 점검): 매일 06:00(아침 글 30분 전)과 20:30. 글을 올리지 않고 스레드 토큰과 게시 권한을 확인하고,
   게시 대기열에 '막힘'으로 남아 있는 줄을 함께 적는다. 게시 일꾼의 "막힘 N"은 그 바퀴에 새로 막힌 수라서, 남아 있는 막힌 줄은 여기서 본다.
 """
 import argparse
+import contextlib
 import csv
 import glob
 import hashlib
+import io
 import os
+import re
+import subprocess
 import sys
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
@@ -35,6 +42,9 @@ from ..collect import catalog as C
 from ..collect import env as envmod
 from ..collect import store
 from ..forecast import targets as T
+from ..ledger import commit as ledger_commit
+from ..ledger import core as ledger_core
+from ..ledger import verify as ledger_verify
 from ..publish import threads as threads_api
 from . import board as B
 from . import drafts as D
@@ -276,10 +286,183 @@ def run_channels(now, due, opts):
     return {"ok": True, "result": "정상 · @%s · %s%s" % (name, quota, tail), "memo": memo, "done": {s.id for s in due}, "lines": []}
 
 
+# --- 장부 봉인: 화요일에 그 주 봇 신호를 받아 봉인하고, 다른 날에는 장부가 그대로인지 본다 (docs/15 §5-5)
+
+SEAL_FROM, SEAL_UNTIL = (9, 40), (23, 15)   # 한국 시간. 봇 신호는 화요일 아침에 올라오고, 봇은 23:31에 주문을 낸다
+SEAL_LOOKBACK_DAYS = 4                      # 화요일에서 이만큼 안쪽의 기준 주만 "이번 주 신호"로 친다(지난주 파일을 다시 봉인하지 않게)
+
+
+def ledger_slots(now, opts):
+    out = []
+    today = now.astimezone(KST).date()
+    for i in range(-1, PLAN_DAYS + 1):
+        d = today + timedelta(days=i)
+        at = datetime(d.year, d.month, d.day, SEAL_FROM[0], SEAL_FROM[1], tzinfo=KST).astimezone(timezone.utc)
+        if d.weekday() == 1:
+            until = datetime(d.year, d.month, d.day, SEAL_UNTIL[0], SEAL_UNTIL[1], tzinfo=KST).astimezone(timezone.utc)
+            out.append(Slot("seal:%s" % d.isoformat(), at, until, 30, 28, "이번 주 신호 봉인", {"day": d.isoformat()}))
+        else:
+            out.append(Slot("ledger:%s" % d.isoformat(), at, at + timedelta(hours=24), 120, 3, "장부 점검", None))
+    return out
+
+
+def ledger_paths(opts):
+    """장부가 놓인 자리. signals.csv 는 서버에서 저장소 밖(data/private)에 둔다 — 추적 중인 파일을 서버가 고치면 코드 반영이 그것을 지울 수 있다."""
+    root = ledger_commit.ROOT
+    return {"ledger": opts.get("ledger_dir") or os.path.join(root, "data", "ledger", "public"),
+            "private": opts.get("private_dir") or os.path.join(root, "data", "private", "ledger"),
+            "signals": opts.get("signals_csv") or os.path.join(root, "data", "private", "track_record", "signals.csv")}
+
+
+def bot_dir(opts, env):
+    """봇 저장소 사본의 자리: 지정한 곳 > CHECKSUM_BOT_DIR > 코드 폴더 옆의 bot_readonly(서버) > us_swing_bot(PC)."""
+    given = opts.get("bot_dir") or env.get("CHECKSUM_BOT_DIR") or os.environ.get("CHECKSUM_BOT_DIR")
+    if given:
+        return given
+    beside = os.path.dirname(ledger_commit.ROOT)
+    for name in ("bot_readonly", "us_swing_bot"):
+        if os.path.isdir(os.path.join(beside, name)):
+            return os.path.join(beside, name)
+    return os.path.join(beside, "bot_readonly")
+
+
+def bot_pull(path, timeout=90):
+    """봇 저장소 사본을 새로 받는다(읽기 전용 키). (받았는가, 못 받은 이유)"""
+    if not os.path.isdir(os.path.join(path, ".git")):
+        return False, "git 저장소가 아님: %s" % path
+    try:
+        r = subprocess.run(["git", "-C", path, "pull", "--ff-only", "-q"], capture_output=True, text=True, timeout=timeout,
+                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, type(e).__name__
+    if r.returncode != 0:
+        tail = [x for x in (r.stderr or r.stdout or "").strip().splitlines() if x.strip()]
+        return False, (tail[-1] if tail else "git pull 실패")[:160]
+    return True, ""
+
+
+def quiet_call(fn, argv):
+    """화면에 찍는 명령을 조용히 돌린다. 출력에는 종목 이름이 섞일 수 있어 통째로 밖에 내지 않는다. (종료 코드, 출력)"""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = fn(argv)
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 1
+        if not isinstance(e.code, int) and e.code:
+            buf.write(str(e.code))
+    return code or 0, buf.getvalue()
+
+
+def as_date(text):
+    """'2026-10-05', '20261005', 'target_20261006.json' 같은 글에서 날짜를 읽는다. 읽지 못하면 None."""
+    m = re.search(r"(20\d\d)-?(\d\d)-?(\d\d)", str(text or ""))
+    if not m:
+        return None
+    try:
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+    except ValueError:
+        return None
+
+
+def rebuild_signals_csv(entries, private_dir, csv_path):
+    """signals.csv 가 없을 때 장부의 주간 기록 원문에서 다시 만든다(같은 순서로 되풀이하면 같은 파일이 나온다)."""
+    n = 0
+    for e in entries:
+        if e.get("kind") != "weekly":
+            continue
+        priv = ledger_commit.read_private(private_dir, e)
+        if priv:
+            n += len(ledger_commit.append_signals_csv(csv_path, priv["payload"], e["seq"]))
+    return n
+
+
+def run_ledger(now, due, opts):
+    env = opts.get("env")
+    if env is None:
+        env = envmod.load()
+    paths, bot, memo = ledger_paths(opts), bot_dir(opts, env), []
+    ledger_file = os.path.join(paths["ledger"], "ledger.jsonl")
+    entries = ledger_core.read_ledger(ledger_file)
+    if not entries:   # 빈 장부에 서버가 기점 기록을 만들지 않는다. 장부는 옮겨 온 것만 잇는다
+        return {"ok": True, "result": "장부 없음 — 이 서버로 옮기기 전입니다(docs/15 §5-5). 아무것도 쓰지 않았습니다", "memo": [], "done": {s.id for s in due}, "lines": []}
+
+    pulled, why = (opts.get("git_pull") or bot_pull)(bot)
+    if not pulled:
+        memo.append("[주의] 봇 저장소 사본을 새로 받지 못함(%s). 서버에 있는 사본으로 봅니다" % why)
+    src, newest = ledger_commit.find_source(bot, None, False), None
+    if src:
+        try:
+            newest = (os.path.basename(src), str(ledger_commit.load_json(src).get("asof_week") or ""))
+        except (ValueError, OSError):
+            memo.append("[주의] 가장 최근 신호 파일을 읽지 못함: %s" % os.path.basename(src))
+    if not os.path.exists(paths["signals"]):
+        made = rebuild_signals_csv(entries, paths["private"], paths["signals"])
+        memo.append("signals.csv 를 장부 원문에서 다시 만듦(%d줄)" % made)
+
+    def this_week(day, since):
+        """이번 주 것으로 치는 주간 기록: 기준 주가 화요일에서 며칠 안쪽이거나, 그 화요일(한국 시간)에 봉인한 것."""
+        out = []
+        for e in entries:
+            if e.get("kind") != "weekly":
+                continue
+            asof = as_date(e.get("week_asof"))
+            try:
+                sealed_on = parse_utc(e.get("committed_at")).astimezone(KST).date()
+            except (TypeError, ValueError):
+                sealed_on = None
+            if (asof is not None and since <= asof <= day) or sealed_on == day:
+                out.append(e)
+        return out
+
+    done, head = set(), ""
+    seal_slots = [s for s in due if s.ctx]
+    for s in seal_slots:
+        day = as_date(s.ctx["day"])
+        since = day - timedelta(days=SEAL_LOOKBACK_DAYS)
+        got = this_week(day, since)
+        fresh = False
+        if newest:   # 지난주 파일을 이번 주 것으로 다시 봉인하지 않는다: 기준 주(없으면 파일 이름의 날짜)가 며칠 안쪽이어야 한다
+            when = as_date(newest[1]) or as_date(newest[0])
+            unsealed = not any(e.get("kind") == "weekly" and e.get("week_asof") == newest[1] for e in entries)
+            fresh = unsealed and when is not None and since <= when <= day
+        if not got and fresh:
+            argv = ["--bot", bot, "--ledger-dir", paths["ledger"], "--private-dir", paths["private"], "--signals-csv", paths["signals"]]
+            code, out = quiet_call(ledger_commit.main, argv + (["--no-ots"] if opts.get("no_ots") else []))
+            entries = ledger_core.read_ledger(ledger_file)
+            got = this_week(day, since)
+            memo.extend(x.strip() for x in out.splitlines() if x.strip().startswith("봉인:"))
+            if code != 0:
+                memo.append("[주의] 봉인 명령이 멈춤(코드 %s): %s" % (code, " / ".join(x.strip() for x in out.splitlines() if x.strip().startswith(("[중단]", "- ")))[:300]))
+        if got:
+            e = got[-1]
+            done.add(s.id)
+            head = "봉인됨 · 기록 #%d (기준 주 %s: 청산 %s / 진입 후보 %s / 보유 %s)" % (e["seq"], e["week_asof"], e.get("n_exits", "?"), e.get("n_entry_candidates", "?"), e.get("n_holdings", "?"))
+        else:
+            head = "기다리는 중 — 이번 주 신호 파일이 아직 봇 저장소에 없음"
+            memo.append("%s까지 %d분마다 다시 봅니다. 봇 집행(23:31) 전에 올라와야 봉인됩니다" % ("%02d:%02d" % SEAL_UNTIL, s.gap))
+
+    code, out = quiet_call(ledger_verify.main, ["--ledger-dir", paths["ledger"], "--private-dir", paths["private"]])
+    vlines = [x.strip() for x in out.splitlines() if x.strip()]
+    counts = next((x for x in vlines if x.startswith("기록 ")), "기록 %d건" % len(entries))
+    if newest:
+        sealed = any(e.get("kind") == "weekly" and e.get("week_asof") == newest[1] for e in entries)
+        memo.append("봇 신호 최신: %s (기준 주 %s, %s)" % (newest[0], newest[1], "봉인됨" if sealed else "아직 봉인 전"))
+    else:
+        memo.append("[주의] 봇 저장소 사본에서 라이브 신호 파일을 찾지 못함: %s" % os.path.join(bot, "signals"))
+    if code != 0:
+        memo = [x for x in vlines if x.startswith(("[문제", "- "))][:6] + memo
+        return {"ok": False, "result": "실패: 장부 점검에서 문제가 나옴 · %s%s" % (counts, " · " + head if head else ""), "memo": memo, "done": set(), "lines": []}
+    done |= {s.id for s in due if not s.ctx}
+    tail = "장부 이상 없음 · %s · 마지막 해시 %s…" % (counts, entries[-1]["entry_hash"][:16])
+    return {"ok": True, "result": "%s · %s" % (head, tail) if head else tail, "memo": memo, "done": done, "lines": []}
+
+
 JOBS = [Job("collect_indicators", "지표 수집", indicator_slots, run_indicators),
         Job("load_drafts", "초안 싣기", draft_slots, run_drafts),
         Job("log_edits", "고친 기록", edit_slots, run_edits),
-        Job("check_channels", "스레드 점검", channel_slots, run_channels)]
+        Job("check_channels", "스레드 점검", channel_slots, run_channels),
+        Job("pull_bot_signal", "장부 봉인", ledger_slots, run_ledger)]
 
 
 # --- 일꾼

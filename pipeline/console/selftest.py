@@ -468,6 +468,70 @@ X용 짧은 글
         ran = J.tick(now=t0, opts=dict(o1, db=os.path.join(tmp, "c3.db")), jobs=only, board_opener=no_board, log=jlog.append)
         check("스레드 점검 작업: 조종판을 못 열어도 토큰 확인은 한다", len(ran) == 1 and ran[0][2]["ok"] and "게시 대기열을 읽지 못함" in " ".join(ran[0][2]["memo"]), ran)
 
+    # --- 장부 봉인: 화요일에 그 주 신호만 봉인하고, 종목 이름은 조종판에 적지 않는다
+    with tempfile.TemporaryDirectory() as tmp:
+        board = B.CsvBoard(os.path.join(tmp, "board"))
+        for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
+            board.ensure(tab)
+        bot, led, prv, sig_csv = (os.path.join(tmp, x) for x in ("bot", "ledger", "private", os.path.join("priv_tr", "signals.csv")))
+        os.makedirs(os.path.join(bot, "signals"))
+
+        def signal_file(day, asof, symbol):
+            with open(os.path.join(bot, "signals", "target_%s.json" % day.replace("-", "")), "w", encoding="utf-8") as f:
+                json.dump({"generator": "live_signal_a_selftest", "engine": "A", "params": {}, "asof_week": asof, "generated_at": day,
+                           "orders": {"exit": [], "entry": [{"symbol": symbol, "group": "G"}]}, "model_positions": [{"symbol": "HOLDSYM"}], "context": {}}, f)
+        tue = datetime(2099, 1, 5, 0, 45, tzinfo=timezone.utc)
+        while tue.astimezone(J.KST).weekday() != 1:
+            tue += timedelta(days=1)                      # 화요일 09:45 (한국 시간)
+        day = tue.astimezone(J.KST).date()
+        only = [j for j in J.JOBS if j.id == "pull_bot_signal"]
+        pulls = []
+        lo = {"db": os.path.join(tmp, "l.db"), "env": {}, "bot_dir": bot, "ledger_dir": led, "private_dir": prv, "signals_csv": sig_csv, "no_ots": True,
+              "git_pull": lambda path: (pulls.append(path) or True, "")}
+        kw = dict(opts=lo, jobs=only, board_opener=lambda: board, log=lambda x: None)
+        status = lambda: {r["항목"]: r for r in board.read(B.STATUS)}.get("장부 봉인", {})
+        ids = [x.id for x in J.ledger_slots(tue, {})]
+        signal_file((day - timedelta(days=7)).isoformat(), (day - timedelta(days=8)).isoformat(), "OLDSYM")
+        ran = J.tick(now=tue, **kw)
+        check("장부 봉인: 빈 장부에는 서버가 아무것도 쓰지 않음", "seal:%s" % day.isoformat() in ids and "ledger:%s" % (day - timedelta(days=1)).isoformat() in ids
+              and len(ran) == 1 and status().get("결과", "").startswith("장부 없음") and not os.path.exists(os.path.join(led, "ledger.jsonl")) and not pulls, (ids[:4], ran, status()))
+        code, _ = J.quiet_call(J.ledger_commit.main, ["--bot", bot, "--ledger-dir", led, "--private-dir", prv, "--signals-csv", os.path.join(tmp, "pc_signals.csv"), "--no-ots"])
+        read = lambda: J.ledger_core.read_ledger(os.path.join(led, "ledger.jsonl"))
+        lo2 = dict(lo, db=os.path.join(tmp, "l2.db"))
+        kw2 = dict(kw, opts=lo2)
+        ran = J.tick(now=tue, **kw2)
+        st = status()
+        with open(os.path.join(tmp, "pc_signals.csv"), encoding="utf-8") as f1, open(sig_csv, encoding="utf-8") as f2:
+            same_csv = f1.read() == f2.read()
+        check("장부 봉인: 지난주 파일뿐이면 기다리고, signals.csv 는 장부 원문에서 다시 만든다", code == 0 and len(read()) == 2 and len(ran) == 1 and ran[0][2]["ok"] and not ran[0][2]["done"]
+              and st["결과"].startswith("기다리는 중") and "장부 이상 없음" in st["결과"] and "봉인됨)" in st["메모"] and same_csv and pulls == [bot]
+              and J.tick(now=tue + timedelta(minutes=5), **kw2) == [], (code, ran, st, same_csv))
+        signal_file(day.isoformat(), (day - timedelta(days=1)).isoformat(), "NEWSYM")
+        ran = J.tick(now=tue + timedelta(minutes=30), **kw2)
+        st, entries = status(), read()
+        with open(sig_csv, encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        everything = json.dumps(board.read(B.STATUS), ensure_ascii=False)
+        check("장부 봉인: 이번 주 파일이 오면 봉인하고 건수와 해시만 적는다", len(ran) == 1 and ran[0][2]["done"] == {"seal:%s" % day.isoformat()} and len(entries) == 3
+              and entries[-1]["kind"] == "weekly" and entries[-1]["week_asof"] == (day - timedelta(days=1)).isoformat()
+              and st["결과"].startswith("봉인됨 · 기록 #3 (기준 주 %s: 청산 0 / 진입 후보 1 / 보유 1)" % (day - timedelta(days=1)).isoformat()) and entries[-1]["entry_hash"][:16] in st["결과"]
+              and [r["symbol"] for r in rows] == ["OLDSYM", "NEWSYM"] and not any(x in everything for x in ("OLDSYM", "NEWSYM", "HOLDSYM"))
+              and os.path.exists(os.path.join(prv, "000003_weekly_%s.json" % (day - timedelta(days=1)).isoformat()))
+              and J.tick(now=tue + timedelta(minutes=60), **kw2) == [], (ran, st, entries[-1], rows))
+        wed = tue + timedelta(days=1)
+        ran = J.tick(now=wed, **kw2)
+        st = status()
+        good = len(ran) == 1 and ran[0][2]["ok"] and st["결과"].startswith("장부 이상 없음 · 기록 3건") and len(read()) == 3
+        with open(os.path.join(led, "ledger.jsonl"), encoding="utf-8") as f:
+            text = f.read()
+        with open(os.path.join(led, "ledger.jsonl"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(text.replace('"n_holdings":1', '"n_holdings":2', 1))
+        ran = J.tick(now=wed, opts=dict(lo, db=os.path.join(tmp, "l3.db")), jobs=only, board_opener=lambda: board, log=lambda x: None)
+        st = status()
+        check("장부 봉인: 다른 날은 점검만, 고친 흔적이 있으면 실패로 적는다", good and len(ran) == 1 and not ran[0][2]["ok"] and st["결과"].startswith("실패: 장부 점검에서 문제")
+              and "entry_hash 불일치" in st["메모"], (good, ran, st))
+        check("날짜 읽기: 줄표가 있든 없든, 파일 이름에서도", [str(J.as_date(x)) for x in ("2026-10-05", "20261005", "target_20261006.json", "주차 41")] == ["2026-10-05", "2026-10-05", "2026-10-06", "None"])
+
     class FakeApi(Exception):
         pass
     try:
