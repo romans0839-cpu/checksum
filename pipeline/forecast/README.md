@@ -96,7 +96,7 @@ python scripts/engine_cost.py                             비용 어림
 ## 아직 없는 것
 
 - 경제분석국·에너지정보청·노동부 수집기 (노동통계국은 `pipeline/collect/`에 있음)
-- 레시피 v1 — 실행기(`runner.py`)는 있다(10/9). 실제 API로는 아직 불러 보지 않았다: 서버에서 `probe`와 `preview`가 첫 시험이다
+- 엔진 등록 — 레시피 v1은 서버에 놓였고 `probe`·`preview`가 실제 API로 정상이었다(10/9 20:16). 등록(`runner register`)이 남았다
 - 서버의 예약 작업(발표 전날 `run`을 되풀이해 부르는 줄) — `pipeline/console/jobs.py`에 더한다
 - 도전자 버전을 현 버전과 함께 돌리는 것 — 지금은 이름마다 가장 높은 버전만 고른다(`run --engines`로 직접 줄 수는 있다)
 - 시장 예상치 내부 기록의 봉인 (docs/12 §6)
