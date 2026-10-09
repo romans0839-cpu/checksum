@@ -18,6 +18,11 @@ import urllib.request
 
 HOST = "https://graph.threads.net"
 MAX_CHARS = 500
+# 서버가 스레드 API를 부르지 않고 쉬는 기한(한국 시간, "YYYY-MM-DD HH:MM"). 비우면 쉬지 않는다.
+# 10/9: 메타 개발자 계정에 "비정상적인 활동" 확인이 다시 걸렸다(10/8 밤에 풀고 열 시간쯤 뒤). 걸려 있는 동안과 푼 직후에
+# 서버가 계속 부르면 다시 걸릴 수 있어, 풀고 나서 조용히 둔다. 쉬는 동안 때가 된 스레드 줄은 일꾼이 '보류'로 바꾸고
+# 사람이 스레드 앱에서 직접 올린다. X는 그대로 올라간다. 다시 열 때는 이 값을 비우거나 날짜를 고쳐 올린다.
+PAUSED_UNTIL_KST = "2026-10-12 06:20"
 
 
 class PostError(Exception):
@@ -38,6 +43,19 @@ def _call(method, url, data=None, timeout=30):
         raise PostError("스레드 API 오류 %s: %s" % (e.code, msg[:200]))
     except (urllib.error.URLError, OSError) as e:
         raise PostError("스레드에 닿지 못했습니다: %s" % getattr(e, "reason", e))
+
+
+def paused(now=None, until=None):
+    """쉬는 중이면 기한(글), 아니면 빈 글. now 는 시각대가 붙은 datetime."""
+    from datetime import datetime, timedelta, timezone
+    until = PAUSED_UNTIL_KST if until is None else until
+    if not until:
+        return ""
+    try:
+        end = datetime.strptime(until, "%Y-%m-%d %H:%M").replace(tzinfo=timezone(timedelta(hours=9)))
+    except ValueError:
+        return ""
+    return until if (now or datetime.now(timezone.utc)) < end else ""
 
 
 def post(text, env, reply_to=None, wait=15, call=_call, sleep=time.sleep):

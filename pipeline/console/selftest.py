@@ -468,6 +468,37 @@ X용 짧은 글
         ran = J.tick(now=t0, opts=dict(o1, db=os.path.join(tmp, "c3.db")), jobs=only, board_opener=no_board, log=jlog.append)
         check("스레드 점검 작업: 조종판을 못 열어도 토큰 확인은 한다", len(ran) == 1 and ran[0][2]["ok"] and "게시 대기열을 읽지 못함" in " ".join(ran[0][2]["memo"]), ran)
 
+    # --- 스레드 API를 쉬는 동안: 스레드 줄은 부르지 않고 '보류', X 줄은 그대로
+    with tempfile.TemporaryDirectory() as tmp:
+        board = B.CsvBoard(os.path.join(tmp, "board"))
+        for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
+            board.ensure(tab)
+        W.add_drafts(board, [{"channel": B.CH_THREADS, "slot": "2099-01-05 06:30", "text": "쉬는 동안의 스레드 글입니다.", "note": "p-1"},
+                             {"channel": B.CH_X, "slot": "2099-01-05 06:30", "text": "쉬는 동안의 X 글입니다.", "note": "p-1"},
+                             {"channel": B.CH_THREADS, "slot": "2099-01-09 06:30", "text": "아직 때가 안 된 스레드 글입니다.", "note": "p-2"}], W.banned_terms())
+        for r in board.read(B.QUEUE):
+            board.update(B.QUEUE, r["_row"], {"상태": B.ST_OK})
+        called = []
+        fake = {B.CH_THREADS: lambda t, e, reply_to=None: called.append("스레드") or ("t1", "https://threads.example/t1"),
+                B.CH_X: lambda t, e, reply_to=None: called.append("X") or ("x1", "https://x.example/x1")}
+        t0 = datetime(2099, 1, 5, 0, 0, tzinfo=timezone.utc)   # 한국 시간 1/5 09:00
+        res = W.run_once(board, {}, now=t0, posters=fake, log=lambda x: None, paused=lambda now: "2099-01-07 06:20")
+        q = board.read(B.QUEUE)
+        again = W.run_once(board, {}, now=t0 + timedelta(days=5), posters=fake, log=lambda x: None, paused=lambda now: "")
+        q2 = board.read(B.QUEUE)
+        check("쉬는 동안: 스레드는 부르지 않고 보류, X는 올리고, 기한 뒤에도 보류한 줄은 올라가지 않음", res == (1, 0, 1) and called[:1] == ["X"] and q[0]["상태"] == B.ST_HOLD
+              and "스레드 API를 쉬는 중(2099-01-07 06:20까지)" in q[0]["검사"] and q[1]["상태"] == B.ST_DONE and q[2]["상태"] == B.ST_OK
+              and again == (1, 0, 0) and called == ["X", "스레드"] and q2[0]["상태"] == B.ST_HOLD and q2[2]["상태"] == B.ST_DONE, (res, called, [(r["상태"], r["검사"]) for r in q2]))
+        kst = timezone(timedelta(hours=9))
+        check("쉬는 기한 읽기: 기한 전에는 기한을, 지나면 빈 글을", threads_api.paused(datetime(2026, 10, 12, 6, 19, tzinfo=kst), "2026-10-12 06:20") == "2026-10-12 06:20"
+              and threads_api.paused(datetime(2026, 10, 12, 6, 20, tzinfo=kst), "2026-10-12 06:20") == "" and threads_api.paused(t0, "") == "" and threads_api.paused(t0, "엉뚱한 값") == "")
+        only = [j for j in J.JOBS if j.id == "check_channels"]
+        hit = []
+        ran = J.tick(now=datetime(2099, 1, 5, 21, 0, tzinfo=timezone.utc), opts={"db": os.path.join(tmp, "p.db"), "env": {}, "threads_paused": lambda now: "2099-01-07 06:20",
+                                                                              "threads_check": lambda e: hit.append(1)}, jobs=only, board_opener=lambda: board, log=lambda x: None)
+        st = {r["항목"]: r for r in board.read(B.STATUS)}.get("스레드 점검", {})
+        check("쉬는 동안: 스레드 점검도 API를 부르지 않는다", len(ran) == 1 and ran[0][2]["ok"] and not hit and st.get("결과", "").startswith("쉬는 중 — 2099-01-07 06:20까지"), (ran, st))
+
     # --- 장부 봉인: 화요일에 그 주 신호만 봉인하고, 종목 이름은 조종판에 적지 않는다
     with tempfile.TemporaryDirectory() as tmp:
         board = B.CsvBoard(os.path.join(tmp, "board"))

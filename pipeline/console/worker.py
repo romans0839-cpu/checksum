@@ -110,10 +110,11 @@ def add_draft(board, channel, slot, text, reply="", note="", banned=None):
     return add_drafts(board, [{"channel": channel, "slot": slot, "text": text, "reply": reply, "note": note}], banned)[0]
 
 
-def run_once(board, env, now=None, dry_run=False, posters=None, con=None, log=print):
+def run_once(board, env, now=None, dry_run=False, posters=None, con=None, log=print, paused=None):
     """한 바퀴. (올린 수, 막힌 수, 기다리는 수)를 돌려준다."""
     now = now or datetime.now(timezone.utc)
     posters = posters or {B.CH_THREADS: threads_api.post, B.CH_X: x_api.post}
+    threads_rest = (paused or threads_api.paused)(now)   # 스레드 API를 쉬는 기한. 쉬는 동안에는 스레드를 부르지 않는다
     banned = banned_terms()
     posted = blocked = waiting = 0
     for r in board.read(B.QUEUE):
@@ -140,6 +141,11 @@ def run_once(board, env, now=None, dry_run=False, posters=None, con=None, log=pr
                 board.update(B.QUEUE, row, {"상태": B.ST_BLOCKED, "검사": " / ".join(problems)})
             blocked += 1
             log("막힘 %s번: %s" % (r.get("번호"), "; ".join(problems)))
+            continue
+        if channel == B.CH_THREADS and threads_rest:   # 올리지 않고 사람에게 넘긴다. 쉬는 기한이 지나도 이 줄이 뒤늦게 올라가지 않게 '보류'로 둔다
+            if not dry_run:
+                board.update(B.QUEUE, row, {"상태": B.ST_HOLD, "검사": "스레드 API를 쉬는 중(%s까지). 스레드 앱에서 직접 올리고 이 줄은 '보류'로 둡니다" % threads_rest})
+            log("보류 %s번 [%s]: 스레드 API를 쉬는 중(%s까지)" % (r.get("번호"), channel, threads_rest))
             continue
         if dry_run:
             log("올릴 것 %s번 [%s] %s" % (r.get("번호"), channel, text[:40].replace("\n", " ")))

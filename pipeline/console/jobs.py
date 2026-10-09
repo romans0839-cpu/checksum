@@ -275,6 +275,10 @@ def run_channels(now, due, opts):
     if blocked:
         memo.append("막힌 줄 %d개(고친 뒤 상태를 다시 '승인'으로 바꿔야 올라갑니다): %s" % (len(blocked), " | ".join(blocked)[:1500]))
     tail = " · 막힌 줄 %d" % len(blocked) if blocked else ""
+    rest = (opts.get("threads_paused") or threads_api.paused)(now)
+    if rest:   # 쉬는 동안에는 점검도 API를 부르지 않는다
+        memo.insert(0, "때가 된 스레드 줄은 게시 일꾼이 '보류'로 바꿉니다. 스레드 앱에서 직접 올립니다. X 줄은 그대로 올라갑니다")
+        return {"ok": True, "result": "쉬는 중 — %s까지 스레드 API를 부르지 않음%s" % (rest, tail), "memo": memo, "done": {s.id for s in due}, "lines": []}
     try:
         name, uid, used, total = (opts.get("threads_check") or threads_api.check)(env)
     except threads_api.PostError as e:
