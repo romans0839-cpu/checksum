@@ -603,6 +603,56 @@ def flow_checks(check, tmp, db, sched):
     check("명령 probe: 레시피의 모델을 한 번씩", code == 0 and out.count("닿음") == 3 and "0.37" not in out and "낮은" not in out, out)
 
 
+def cap_checks(check, tmp, db, sched):
+    # --- 오래 기다리다 답 없이 끝난 호출은 엔진마다 n_runs × max_attempts 번까지만 (요금이 나갔을 수 있다)
+    w = World(tmp, "slowfail", db, sched)
+    clock = Clock()
+    plain = FakeApi()
+    plain.plan = {"anthropic": good("anthropic", CPI, A_VALS)}
+    slow = {"n": 0}
+
+    def send(url, headers, body, timeout):
+        if "anthropic.com" in url:
+            return plain.send(url, headers, body, timeout)
+        slow["n"] += 1
+        clock.t += 100   # 100초를 기다리다 끊겼다
+        return 0, None, ("TimeoutError", "timed out"), None
+
+    go = lambda when: R.run_event("CPI", "2099-01", dict(w.opts, parallel=1), now=when, env=w.env, send=send, clock=clock, sleep=lambda x: None, build=w.build)
+    res = go(T0)
+    first = (res["state"], dict(res["engines"]), slow["n"])
+    res2 = go(T0 + timedelta(minutes=20))
+    res3 = go(T0 + timedelta(minutes=40))
+    check("실행: 오래 기다리다 끊긴 호출은 상한(5번 × 2)까지만 — 그 엔진은 더 부르지 않고 미제출로 닫는다", first == ("sealed", {"alpha@1": "sealed", "beta@1": "missed"}, 10)
+          and slow["n"] == 10 and res2["state"] == "already" and res3["engines"] == {"alpha@1": "sealed", "beta@1": "missed"}
+          and "답 없이 끝난 호출이 10번(상한 10)" in said(res) and R.slow_errors(w.work, "beta@1") == 10 and R.slow_errors(w.work, "alpha@1") == 0, (first, slow, res2, said(res)))
+    with open(os.path.join(w.work, "beta@1", "errors.jsonl"), "a", encoding="utf-8") as f:
+        f.write("읽을 수 없는 줄\n[1]\n" + json.dumps({"seconds": 59.9}) + "\n" + json.dumps({"seconds": "100"}) + "\n")
+    check("실행: 오류 기록의 읽을 수 없는 줄·짧은 실패는 세지 않는다", R.slow_errors(w.work, "beta@1") == 10 and R.slow_errors(w.work, "none@1") == 0)
+
+    w = World(tmp, "slowfail2", db, sched)
+    os.makedirs(os.path.join(w.work, "beta@1"))
+    with open(os.path.join(w.work, "beta@1", "errors.jsonl"), "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps({"status": "error", "seconds": 360.0, "run": 1}) + "\n" for _ in range(9)))
+    slow["n"] = 0
+    res = go(T0)
+    check("실행: 실행 도중에 상한에 닿으면 그 자리에서 그만 부른다", slow["n"] == 1 and res["engines"] == {"alpha@1": "sealed", "beta@1": "missed"}, (slow, res))
+
+    # --- 마감 뒤에는 엔진별로 봉인된 것과 놓친 것을 알려 준다
+    w = World(tmp, "late", db, sched)
+    w.api.plan = {"anthropic": good("anthropic", CPI, A_VALS), "openai": [(503, None, ("api_error", ""))]}
+    res = w.go()
+    before = dict(w.api.calls)
+    late = w.go(datetime(2099, 2, 11, 6, 0, tzinfo=timezone.utc))
+    check("실행: 마감 뒤에는 부르지 않고 엔진별 상태(봉인됨·미제출)를 알려 줌", res["state"] == "pending" and late["state"] == "already" and w.api.calls == before
+          and late["engines"] == {"alpha@1": "sealed", "beta@1": "missed"}, (res, late))
+
+    bad_sched = os.path.join(tmp, "schedule_bad.csv")
+    with open(bad_sched, "w", encoding="utf-8", newline="") as f:
+        f.write("event_kind,title_ko,ref_period,release_at_utc,targets\nCPI,소비자물가,2099-01,읽을 수 없음,CPI_MOM\nCPI,소비자물가,2099-01,2099-02-11T13:30:00Z,CPI_MOM\n")
+    check("일정표: 시각을 읽을 수 없는 줄은 건너뛰고 다음 줄을 쓴다", R.B.lookup_release(bad_sched, "CPI", "2099-01") == "2099-02-11T13:30:00Z" and R.B.lookup_release(bad_sched, "PPI", "2099-01") is None)
+
+
 def run_checks(check):
     with tempfile.TemporaryDirectory() as tmp:
         unit_checks(check, tmp)
@@ -617,3 +667,4 @@ def run_checks(check):
             f.write("event_kind,title_ko,ref_period,release_at_utc,targets\n")
             f.write("CPI,소비자물가,2099-01,2099-02-11T13:30:00Z,CPI_MOM CPI_CORE_MOM CPI_YOY\n")
         flow_checks(check, tmp, db, sched)
+        cap_checks(check, tmp, db, sched)

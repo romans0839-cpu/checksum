@@ -64,7 +64,7 @@ python -m pipeline.content.selftest                 # 일정 체크 자체 시�
 python -m pipeline.console.selftest                 # 조종판 일꾼 자체 시험 (시트·계정 안 씀)
 python -m pipeline.console.worker run --dry-run     # 조종판에서 승인된 글을 올리지 않고 미리 보기 (서버)
 python -m pipeline.console.drafts check data/sns/drafts/<file>.md   # SNS 초안 파일을 올리기 전 검사. 올리면 서버가 대기열에 '초안'으로 싣는다 (docs/15 §5-3)
-python -m pipeline.console.jobs tick                # 서버: 때가 된 예약 작업(지표 수집 등)을 돌리고 '오늘 현황'에 적는다 (cron 5분마다). plan 은 앞으로의 예정, run <작업> 은 지금 한 번
+python -m pipeline.console.jobs tick                # 서버: 때가 된 예약 작업(지표 수집·장부 봉인·엔진 봉인 등)을 돌리고 '오늘 현황'에 적는다 (cron 5분마다). plan 은 앞으로의 예정, run <작업> 은 지금 한 번
 bash scripts/server_sync.sh                         # 서버: 새 코드 받기 → 자체 시험 → 반영 또는 되돌림 (cron 10분마다)
 bash scripts/server_cron.sh                         # 서버: 예약 세 줄 맞추기 (한 번). 예약 작업의 시각은 cron 이 아니라 pipeline/console/jobs.py 가 정한다
 python -m pipeline.forecast.bundle --event CPI --ref 2026-09   # 엔진에 줄 사실 묶음 만들기
@@ -72,7 +72,7 @@ python -m pipeline.forecast.selftest                # 엔진 예측 봉인·채�
 python -m pipeline.forecast.runner check            # 엔진 레시피 폴더 검사 (호출 없음). 레시피는 서버의 data/private/engines/ 에만 있다
 python -m pipeline.forecast.runner estimate --event CPI --ref 2026-09  # 서버: 레시피대로 돌리면 쓰는 토큰·요금의 상한 (엔진을 부르지 않는다, D34)
 python -m pipeline.forecast.runner preview --event CPI --ref 2026-09   # 서버: 엔진마다 한 번 불러 형식·걸린 시간만 본다. 답은 저장도 표시도 하지 않는다
-python -m pipeline.forecast.runner run --event CPI --ref 2026-09       # 서버: 묶음 → 엔진 호출 → 합치기 → 봉인. 여러 번 돌려도 받은 답은 다시 받지 않는다
+python -m pipeline.forecast.runner run --event CPI --ref 2026-09       # 서버: 묶음 → 엔진 호출 → 합치기 → 봉인. 여러 번 돌려도 받은 답은 다시 받지 않는다. 손으로 돌리지 않는다 — 예약 작업 "엔진 봉인"이 발표 전날 13:30쯤부터 부른다(docs/12 §7-2)
 python -m pipeline.forecast.seal --file <예측.json>  # 예측 봉인 (발표 12시간 전까지). 실행기가 부른다
 python -m pipeline.forecast.score                   # 봉인된 예측 채점
 ```

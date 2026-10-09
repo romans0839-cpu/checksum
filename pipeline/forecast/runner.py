@@ -67,7 +67,7 @@ from . import engine as E
 from . import seal as S
 from . import targets as T
 
-RUNNER = "runner/0.1"
+RUNNER = "runner/0.2"   # 0.2(10/9): 오래 기다린 실패에 상한
 RECIPE_FORMAT = "recipe/1"
 UTC_FMT = "%Y-%m-%dT%H:%M:%SZ"
 RECIPE_KEYS = ("format", "provider", "model", "n_runs", "min_valid_runs", "max_attempts", "timeout_sec", "render", "answer", "aggregate", "request")
@@ -84,6 +84,7 @@ FINAL_MARGIN_H = 1.0     # 마감이 이만큼 남으면 더 부르지 않고, �
 ERRORS_PER_RUN = 2       # 한 번의 실행에서 한 번(run)이 겪어도 되는 오류 수. 넘으면 다음 실행으로 미룬다
 RETRY_WAIT = 5           # 오류 뒤 다시 부르기 전에 기다리는 초(상대가 알려 준 시간이 있으면 그 시간, 최대 60초)
 SEAL_RESERVE_SEC = 300   # 봉인 마감 이만큼 전에는 끝나 있도록, 그 안에 끝나지 못할 호출은 시작하지 않는다
+SLOW_ERROR_SEC = 60      # 이만큼 기다리다 답 없이 끝난 호출은 "오래 기다린 실패"로 센다. 요금이 나갔을 수 있어서, 엔진마다 발표 하나에 n_runs × max_attempts 번까지만 겪는다
 VALUE_LIMIT = 1e12       # 크기가 이 이상인 숫자는 답으로 치지 않는다(형식 오류)
 PARSE_TAIL = 20000       # 답의 끝에서 이만큼만 읽는다(답은 맨 끝에 있고, 아주 긴 글을 훑느라 멈추지 않게)
 
@@ -191,6 +192,15 @@ def latest_folders(engines_dir):
         if vers:
             out.append((name, str(max(vers)), os.path.join(base, "v%d" % max(vers))))
     return out
+
+
+def longest_call(engines_dir):
+    """엔진 폴더의 레시피(이름마다 가장 높은 버전) 가운데 한 번 부르는 데 기다리는 시간(timeout_sec)이 가장 긴 것. 읽을 수 있는 레시피가 없으면 0.
+    예약 작업이 한 바퀴에 남은 시간으로 부를 수 있는지 미리 볼 때 쓴다."""
+    try:
+        return max([r["timeout_sec"] for r, bad in (load_recipe(f) for _n, _v, f in latest_folders(engines_dir)) if r and not bad] or [0])
+    except Exception:
+        return 0
 
 
 # --- 사실 표 (render). 묶음(JSON)을 엔진이 읽을 글로 바꾼다. 묶음만 보고 그린다 — 같은 묶음이면 항상 같은 글이 나온다
@@ -540,6 +550,28 @@ def engine_progress(recipe, workdir, tag, final=False):
     return ("pending" if pending else "ready"), ok, pending
 
 
+def slow_errors(workdir, tag):
+    """그 엔진이 이 발표에서 겪은 '오래 기다린 실패'의 수(오류 기록에서 센다). 기록을 읽지 못하면 0."""
+    n = 0
+    try:
+        with open(os.path.join(workdir, tag, "errors.jsonl"), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and _is_num(rec.get("seconds")) and rec["seconds"] >= SLOW_ERROR_SEC:
+                    n += 1
+    except OSError:
+        pass
+    return n
+
+
+def gave_up(recipe, workdir, tag):
+    """오래 기다린 실패가 상한에 닿았는가. 닿으면 그 엔진은 더 부르지 않고 받은 답으로 마무리한다(빠른 오류는 세지 않는다)."""
+    return slow_errors(workdir, tag) >= recipe["n_runs"] * recipe["max_attempts"]
+
+
 def can_write(folder):
     try:
         os.makedirs(folder, exist_ok=True)
@@ -569,8 +601,12 @@ def work_run(eng, k, workdir, deadline, send, clock, sleep, lock, stats):
                 state, _ok, pending = engine_progress(recipe, workdir, eng["tag"])
                 recs = answers_of(workdir, eng["tag"]).get(k, [])
                 writable = can_write(folder)
+                spent = gave_up(recipe, workdir, eng["tag"])
             if state != "pending" or k not in pending:
                 return   # 답이 정해졌거나, 다시 받을 횟수를 다 썼거나, 이 엔진이 min_valid_runs 를 채울 수 없게 됐다
+            if spent:   # 오래 기다린 실패가 상한에 닿았다. 더 부르지 않는다
+                eng["stop"].set()
+                return
             if not writable:   # 답을 받아도 남길 수 없으면 부르지 않는다(받은 답을 버리고 다시 받는 일이 없게)
                 eng["last_error"] = "작업 폴더에 쓸 수 없음 (%s)" % folder
                 eng["stop"].set()
@@ -736,6 +772,9 @@ def _run_event(kind, ref, opts, now, env, send, clock, sleep, build):
         memo.extend(problems[:5])
         return done("blocked", "장부에 문제가 있어 시작하지 않음")
     if lead < MIN_LEAD_H:   # 마감 뒤에는 아무것도 부르지 않고 아무것도 봉인하지 않는다
+        plan = read_json(os.path.join(paths["runs"], "%s_%s" % (kind, ref), "plan.json"))
+        planned = [t for t in plan["engines"] if isinstance(t, str)] if isinstance(plan, dict) and isinstance(plan.get("engines"), list) else []
+        states.update({t: "sealed" if t in sealed else "missed" for t in planned + sorted(sealed)})
         if sealed:
             stamp()
             return done("already", "이미 봉인됨 · %s %s · %s · 봉인 마감이 지나 더 받지 않음" % (kind, ref, ", ".join(sorted(sealed))))
@@ -826,7 +865,7 @@ def _run_event(kind, ref, opts, now, env, send, clock, sleep, build):
         deadline = clock() + (min(budget, to_seal) if budget else to_seal)
         lock, stats, jobs = threading.Lock(), {"calls": 0, "errors": {}, "made": {}}, []
         for e in usable:
-            _state, _ok, pending = engine_progress(e["recipe"], workdir, e["tag"], final)
+            _state, _ok, pending = engine_progress(e["recipe"], workdir, e["tag"], final or gave_up(e["recipe"], workdir, e["tag"]))
             e["key"] = (env.get(KEY_NAME[e["recipe"]["provider"]]) or "").strip()
             if pending and not e["key"]:
                 e["last_error"] = "서버 .env 에 %s 가 없음" % KEY_NAME[e["recipe"]["provider"]]
@@ -842,7 +881,8 @@ def _run_event(kind, ref, opts, now, env, send, clock, sleep, build):
         # 엔진마다 어디까지 왔는가. 답이 다 모인 엔진은 합친다
         ready, forecasts, trouble = [], [], False
         for e in usable:
-            state, ok, _pending = engine_progress(e["recipe"], workdir, e["tag"], final)
+            spent = gave_up(e["recipe"], workdir, e["tag"])
+            state, ok, _pending = engine_progress(e["recipe"], workdir, e["tag"], final or spent)
             recs = [r for v in answers_of(workdir, e["tag"]).values() for r in v]
             t_in, t_out = (sum(r[k] for r in recs if _count(r.get(k))) for k in ("tokens_in", "tokens_out"))
             note = "%s: 맞는 답 %d/%d · 받은 답 %d · 토큰 입력 %d / 출력 %d" % (e["tag"], len(ok), e["recipe"]["n_runs"], len(recs), t_in, t_out)
@@ -860,6 +900,9 @@ def _run_event(kind, ref, opts, now, env, send, clock, sleep, build):
             bad = [str(r.get("reason"))[:80] for r in recs if r["status"] == "invalid"]
             if bad:
                 note += " · 형식이 틀린 답 %d번(%s)" % (len(bad), bad[-1])
+            if spent:
+                note += " · %d초 넘게 기다리다 답 없이 끝난 호출이 %d번(상한 %d) — 더 부르지 않고 받은 답으로 마무리" % (
+                    SLOW_ERROR_SEC, slow_errors(workdir, e["tag"]), e["recipe"]["n_runs"] * e["recipe"]["max_attempts"])
             memo.append(note)
             if state == "ready":
                 try:

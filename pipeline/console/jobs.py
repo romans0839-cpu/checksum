@@ -23,6 +23,10 @@
   종목 이름은 조종판과 로그에 적지 않는다(건수와 해시만).
 - check_channels (스레드 점검): 매일 06:00(아침 글 30분 전)과 20:30. 글을 올리지 않고 스레드 토큰과 게시 권한을 확인하고,
   게시 대기열에 '막힘'으로 남아 있는 줄을 함께 적는다. 게시 일꾼의 "막힘 N"은 그 바퀴에 새로 막힌 수라서, 남아 있는 막힌 줄은 여기서 본다.
+- seal_forecasts (엔진 봉인): 엔진이 맡는 발표(CPI·PPI·고용)마다 발표 32시간 전(한국 시간 전날 13:30쯤)부터 20분마다 엔진 실행기를 불러
+  두 엔진의 답을 모으고 장부에 봉인한다(docs/12 §7-1). 받은 답은 다시 받지 않고, 봉인 마감(발표 12시간 전) 뒤에는 부르지 않는다.
+  묶음에 들어갈 다른 발표가 그 사이에 있으면(예: PPI 전날의 CPI) 그 발표값이 수집된 뒤에 시작한다.
+  엔진이 낸 값은 조종판과 로그에 적지 않는다(엔진별 상태·횟수·토큰만).
 """
 import argparse
 import contextlib
@@ -34,6 +38,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 
@@ -41,6 +46,7 @@ from ..collect import bls
 from ..collect import catalog as C
 from ..collect import env as envmod
 from ..collect import store
+from ..forecast import runner as R
 from ..forecast import targets as T
 from ..ledger import commit as ledger_commit
 from ..ledger import core as ledger_core
@@ -462,11 +468,166 @@ def run_ledger(now, due, opts):
     return {"ok": True, "result": "%s · %s" % (head, tail) if head else tail, "memo": memo, "done": done, "lines": []}
 
 
+# --- 엔진 봉인: 발표 전날 낮부터 두 엔진을 불러 답을 모으고 장부에 봉인한다 (docs/12 §7-1). 값은 어디에도 적지 않는다
+
+ENGINE_EVENTS = ("CPI", "PPI", "EMP")   # 엔진이 맡는 발표. 사실 묶음을 만들 수 있는 것(수집기가 있는 것)만 실제로 예정이 생긴다
+ENGINE_LEAD_H = 32.0             # 발표 몇 시간 전부터 부르나: 한국 시간 전날 13:30(미국 여름 시간) · 14:30(겨울 시간). 전날 밤 글(21시) 전에 끝나고 낮 글(12시)과 겹치지 않는다
+ENGINE_GAP_MIN = 20              # 끝날 때까지 이 간격으로 다시 부른다(받은 답은 다시 받지 않는다)
+ENGINE_AFTER_RELATED_MIN = 30    # 묶음에 들어갈 다른 발표가 그 사이에 있으면 그 발표의 이만큼 뒤부터 시작한다
+ENGINE_RELATED_BEFORE_H = 3.0    # 시작 시각보다 이만큼 앞선 발표까지 "그 사이"로 친다(수집이 늦을 수 있다)
+ENGINE_WAIT_STOP_H = 4.0         # 봉인 마감이 이만큼 남으면 그 발표값을 더 기다리지 않고 있는 자료로 부른다
+ENGINE_BUDGET_SEC = 400          # 한 바퀴에 엔진 호출에 쓰는 시간
+ENGINE_RESERVE_SEC = 110         # 호출 뒤 봉인과 외부 타임스탬프(최대 75초쯤)에 남겨 두는 시간
+ENGINE_MIN_BUDGET_SEC = 30       # 남은 시간이 이보다 짧으면 그 바퀴에는 실행기를 부르지 않는다(봉인·타임스탬프만 남은 때에도)
+ENGINE_START_SEC = 5             # 한 번 부르는 시간(레시피의 timeout_sec)에 이만큼을 더한 시간이 남아 있어야 부른다
+ENGINE_COUNT = 2                 # 엔진의 수(아들러·플레처). 이보다 적은 엔진으로 봉인되면 결과 줄에 알린다
+ENGINE_PARALLEL = 5              # 엔진마다 한꺼번에 부르는 수
+TICK_LIMIT_SEC = 600             # scripts/server_cron.sh 가 일꾼에 거는 timeout 600 과 같아야 한다
+ENGINE_STATE = {"sealed": "봉인됨", "ready": "봉인 전", "pending": "진행 중", "blocked": "쓸 수 없음", "missed": "미제출"}
+ENGINE_HEAD = {"sealed": "봉인됨", "already": "봉인됨", "pending": "진행 중", "missed": "미제출", "blocked": "멈춤"}
+
+
+def engine_slots(now, opts):
+    """엔진이 맡는 발표마다 예정 하나: 발표 32시간 전부터 발표 때까지 20분마다. 봉인과 외부 타임스탬프가 끝나면 그만둔다.
+
+    봉인 마감(발표 12시간 전) 뒤의 바퀴에서는 실행기가 엔진을 부르지도 봉인하지도 않는다 — 빠진 타임스탬프만 다시 받는다.
+    """
+    rows = []
+    for r in schedule_rows(opts.get("schedule") or bls.DEFAULT_SCHEDULE):
+        try:
+            rows.append((r["event_kind"], r["ref_period"], parse_utc(r["release_at_utc"]), r))
+        except (TypeError, ValueError, KeyError):
+            continue   # 읽을 수 없는 줄은 건너뛴다. 지표 수집의 [주의]에 그 줄이 적힌다
+    out, seen = [], set()
+    for kind, ref, released, r in rows:
+        if kind not in ENGINE_EVENTS or kind not in C.RELATED or kind not in T.EVENTS or not T.ref_period_ok(kind, ref) or (kind, ref) in seen:
+            continue
+        seen.add((kind, ref))   # 같은 발표가 두 일정표에 있어도 예정은 하나(실행기도 먼저 나온 줄의 시각을 쓴다)
+        deadline = released - timedelta(hours=R.MIN_LEAD_H)
+        at, wait = released - timedelta(hours=ENGINE_LEAD_H), []
+        first = at - timedelta(hours=ENGINE_RELATED_BEFORE_H)
+        for k2, ref2, rel2, r2 in rows:   # 이 발표의 묶음에 들어가는 다른 발표가 시작 무렵부터 마감 몇 시간 전 사이에 나오면 그 뒤로 미룬다
+            targets = [t for t in (r2.get("targets") or "").split() if t in C.TARGET_SERIES]
+            if k2 in C.RELATED[kind] and targets and first <= rel2 <= deadline - timedelta(hours=ENGINE_WAIT_STOP_H):
+                at = max(at, rel2 + timedelta(minutes=ENGINE_AFTER_RELATED_MIN))
+                wait.append({"title": r2.get("title_ko") or k2, "ref": ref2, "targets": targets})
+        title = r.get("title_ko") or T.EVENTS[kind][0]
+        tries = int((released - at).total_seconds() // (ENGINE_GAP_MIN * 60)) + 6
+        out.append(Slot("engine:%s:%s" % (kind, ref), at, released, ENGINE_GAP_MIN, tries, "%s %s 엔진 봉인" % (title, ref),
+                        {"kind": kind, "ref": ref, "title": title, "release": released, "wait": wait}))
+    out.sort(key=lambda s: (s.at, s.id))
+    return out
+
+
+def seconds_to_quiet(at):
+    """오늘 '돌리지 않는 시간'이 시작될 때까지 남은 초(그 시간 안이면 0 이하). 오늘이 그 요일이 아니거나 그 시간이 끝났으면 None."""
+    k = at.astimezone(KST)
+    start = k.replace(hour=QUIET[1][0], minute=QUIET[1][1], second=0, microsecond=0)
+    end = k.replace(hour=QUIET[2][0], minute=QUIET[2][1], second=0, microsecond=0)
+    return (start - k).total_seconds() if k.weekday() == QUIET[0] and k < end else None
+
+
+def engine_line(name, res):
+    """실행기의 결과 -> '오늘 현황'의 한 줄. 엔진별 상태만 적는다(값은 실행기의 결과에도 없다)."""
+    state, eng = res.get("state"), res.get("engines") or {}
+    head = ENGINE_HEAD.get(state, "멈춤")
+    if not eng:   # 엔진을 살피기 전에 끝난 경우(마감 뒤, 등록된 엔진 없음, 장부 문제). 실행기의 한 줄을 그대로 쓴다
+        return "%s · %s — %s" % (head, name, str(res.get("result") or "")[:200])
+    sealed = sorted(t for t, v in eng.items() if v == "sealed")
+    others = ["%s(%s)" % (t, ENGINE_STATE.get(v, v)) for t, v in sorted(eng.items()) if v != "sealed"]
+    if state in ("sealed", "already") and others:
+        head = "일부만 봉인됨"
+    elif state == "pending" and not res.get("ok"):
+        head = "진행 중(오류 있음)"
+    line = "%s · %s · 봉인된 엔진 %d/%d%s" % (head, name, len(sealed), len(eng), ": " + ", ".join(sealed) if sealed else "")
+    line += " · 나머지: " + ", ".join(others) if others else ""
+    return line + (" · [주의] 이 발표에 쓰인 엔진이 %d개뿐" % len(eng) if len(eng) < ENGINE_COUNT else "")
+
+
+def run_engines(now, due, opts):
+    """때가 된 발표마다 엔진 실행기를 한 번 부른다. 한 바퀴(일꾼의 제한 600초) 안에 끝나도록 쓸 시간을 정해서 넘긴다.
+
+    두 발표가 겹치면 바퀴마다 먼저 할 발표를 바꿔 가며 하고, 남은 시간이 모자란 발표는 다음 차례(20분 뒤)로 미룬다.
+    """
+    clock = opts.get("clock") or time.monotonic
+    t0 = opts.get("tick_started")
+    t0 = clock() if t0 is None else t0
+    run_event = opts.get("run_event") or R.run_event
+    dirs = {k: opts[k] for k in ("ledger_dir", "private_dir", "engines_dir", "runs_dir", "schedule", "db") if opts.get(k)}
+    heads, memo, done, ok, have, need = [], [], {s.id for s in due if not s.ctx}, True, None, None
+    events = sorted((x for x in due if x.ctx), key=lambda x: (x.until, x.id))
+    if len(events) > 1:   # 겹친 발표는 같은 간격으로 함께 돌아온다. 늘 같은 발표가 먼저 시간을 다 쓰지 않게 차례를 돌린다
+        k = int(now.timestamp() // (ENGINE_GAP_MIN * 60)) % len(events)
+        events = events[k:] + events[:k]
+    for s in events:
+        c = s.ctx
+        name = "%s %s" % (c["title"], c["ref"])
+        elapsed = clock() - t0
+        at = now + timedelta(seconds=elapsed)
+        lead_h = (c["release"] - at).total_seconds() / 3600.0
+
+        # 묶음에 들어갈 다른 발표값이 아직 수집되지 않았으면 기다린다. 첫 답을 받는 순간 묶음이 굳어 뒤에 온 값은 쓰이지 않는다
+        if c["wait"] and lead_h >= R.MIN_LEAD_H:
+            if have is None:
+                try:
+                    have = actuals_have(opts.get("actuals") or bls.DEFAULT_ACTUALS)
+                except Exception:
+                    have = set()
+            lack = ["%s %s" % (w["title"], w["ref"]) for w in c["wait"] if any((t, w["ref"]) not in have for t in w["targets"])]
+            if lack and lead_h > R.MIN_LEAD_H + ENGINE_WAIT_STOP_H:
+                heads.append("기다리는 중 · %s — %s 발표값이 아직 수집되지 않음" % (name, ", ".join(lack)))
+                memo.append("%s: 봉인 마감 %g시간 전까지 기다리고, 그때도 없으면 있는 자료로 부릅니다. '지표 수집' 줄을 함께 보세요" % (name, ENGINE_WAIT_STOP_H))
+                continue
+            if lack:
+                memo.append("[알림] %s: %s 발표값 없이 부릅니다(더 기다리지 않음)" % (name, ", ".join(lack)))
+
+        budget = min(ENGINE_BUDGET_SEC, TICK_LIMIT_SEC - ENGINE_RESERVE_SEC - elapsed)
+        q = seconds_to_quiet(at)
+        if q is not None:   # 봇 집행 시간 전에 봉인까지 끝나게 한다
+            budget = min(budget, q - ENGINE_RESERVE_SEC)
+        if budget < ENGINE_MIN_BUDGET_SEC:
+            heads.append("미룸 · %s — 이번 바퀴에 남은 시간이 모자람" % name)
+            continue
+        if lead_h >= R.MIN_LEAD_H + R.FINAL_MARGIN_H:   # 아직 엔진을 부르는 때다(마지막 한 시간에는 부르지 않고 받은 답으로 마무리만 한다)
+            if need is None:
+                need = (opts.get("call_seconds") or R.longest_call)(opts.get("engines_dir") or R.default_paths({})["engines"])
+            if need and need + ENGINE_START_SEC > ENGINE_BUDGET_SEC:   # 이대로는 몇 번을 돌아도 부르지 못한다. 사람이 봐야 한다
+                heads.append("멈춤 · %s — 레시피의 한 번 부르는 시간(%d초)이 한 바퀴에 쓸 수 있는 시간(%d초)보다 깁니다" % (name, need, ENGINE_BUDGET_SEC))
+                memo.append("%s: 엔진을 부르지 못했습니다. 이 줄을 그대로 Claude에게 알려 주세요" % name)
+                ok = False
+                continue
+            if need and budget < need + ENGINE_START_SEC:
+                heads.append("미룸 · %s — 이번 바퀴에 남은 시간(%d초)이 한 번 부르는 시간(%d초)보다 짧음" % (name, budget, need))
+                continue
+
+        res = run_event(c["kind"], c["ref"], dict(dirs, budget_sec=budget, parallel=ENGINE_PARALLEL, no_ots=bool(opts.get("no_ots"))), env=opts.get("env"))
+        state, head = res.get("state"), engine_line(name, res)
+        if state in ("sealed", "already") and res.get("stamped") is False:   # 봉인은 됐다. 외부 타임스탬프만 다음 바퀴에 다시 받는다
+            head += " · 외부 타임스탬프는 아직"
+        elif state in ("sealed", "already", "missed"):
+            done.add(s.id)
+        ok = ok and bool(res.get("ok"))
+        heads.append(head)
+        memo.append("%s: %s" % (name, str(res.get("result") or "")[:300]))
+        memo.extend(str(m)[:400] for m in (res.get("memo") or [])[:12])
+        if res.get("calls"):
+            memo.append("이번 바퀴에 부른 횟수 %d (쓸 시간 %d초)" % (res["calls"], budget))
+        if state == "missed":
+            memo.append("놓친 발표는 뒤늦게 채우지 않습니다(docs/12 §6)")
+        elif s.id not in done and res.get("ok"):   # 실패한 바퀴의 "다시 시도" 줄은 일꾼이 붙인다
+            memo.append("%s: %d분 뒤 이어서 합니다" % (name, s.gap))
+    if not heads:
+        return {"ok": True, "result": "지금 봉인할 발표가 없습니다", "memo": [], "done": done, "lines": []}
+    return {"ok": ok, "result": " | ".join(heads), "memo": memo, "done": done, "lines": []}
+
+
+# 엔진 봉인은 맨 뒤에 둔다: 한 바퀴의 남은 시간을 재서 쓰므로 다른 작업이 먼저 끝나 있어야 한다
 JOBS = [Job("collect_indicators", "지표 수집", indicator_slots, run_indicators),
         Job("load_drafts", "초안 싣기", draft_slots, run_drafts),
         Job("log_edits", "고친 기록", edit_slots, run_edits),
         Job("check_channels", "스레드 점검", channel_slots, run_channels),
-        Job("pull_bot_signal", "장부 봉인", ledger_slots, run_ledger)]
+        Job("pull_bot_signal", "장부 봉인", ledger_slots, run_ledger),
+        Job("seal_forecasts", "엔진 봉인", engine_slots, run_engines)]
 
 
 # --- 일꾼
@@ -577,6 +738,7 @@ def tick(now=None, env=None, db_path=None, jobs=None, opts=None, dry_run=False, 
     """한 바퀴. 돌린(돌릴) 작업의 [(job_id, [slot id], 결과 또는 None)]을 돌려준다."""
     now = now or datetime.now(timezone.utc)
     opts = dict(opts or {})
+    opts.setdefault("tick_started", (opts.get("clock") or time.monotonic)())   # 엔진 봉인이 이 바퀴의 남은 시간을 잰다
     db_path = db_path or opts.get("db") or store.DEFAULT_DB
     opts["db"] = db_path
     jobs = JOBS if jobs is None else jobs
@@ -641,8 +803,11 @@ def main(argv=None):
         if job.id == "load_drafts" and not due:
             print("지금 실을 초안이 없습니다.")
             return 0
+        if job.id == "seal_forecasts" and not due:   # '오늘 현황'의 앞선 결과를 빈 줄로 덮지 않는다
+            print("지금 봉인할 발표가 없습니다. 예정은: python -m pipeline.console.jobs plan")
+            return 0
         env = envmod.load()
-        res = run_job(job, due + [manual], now, {"db": store.DEFAULT_DB, "secrets": secrets_of(env)}, store.DEFAULT_DB, lambda: B.open_board(env), print)
+        res = run_job(job, due + [manual], now, {"db": store.DEFAULT_DB, "secrets": secrets_of(env), "tick_started": time.monotonic()}, store.DEFAULT_DB, lambda: B.open_board(env), print)
         return 0 if res["ok"] else 1
     ran = tick(now=now, dry_run=a.dry_run)
     if a.dry_run and not ran:

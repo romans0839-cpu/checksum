@@ -164,12 +164,17 @@ def dumps(bundle):
 
 
 def lookup_release(schedule_glob, event_kind, ref_period):
+    """일정표에서 그 발표의 시각(UTC 글). 시각을 읽을 수 없는 줄은 건너뛴다(예약 작업의 예정과 같은 줄을 쓰도록). 없으면 None."""
     import csv
     import glob
     for path in sorted(glob.glob(schedule_glob)):
         with open(path, encoding="utf-8-sig", newline="") as f:
             for r in csv.DictReader(f):
-                if r["event_kind"] == event_kind and r["ref_period"] == ref_period:
+                if r.get("event_kind") == event_kind and r.get("ref_period") == ref_period:
+                    try:
+                        datetime.strptime(r.get("release_at_utc") or "", "%Y-%m-%dT%H:%M:%SZ")
+                    except ValueError:
+                        continue
                     return r["release_at_utc"]
     return None
 

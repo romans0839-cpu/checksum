@@ -9,8 +9,10 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-from ..collect import store
+from ..collect import bls, store
 from ..collect.selftest import fake_response
+from ..forecast import runner as R
+from ..forecast import selftest_runner as SR
 from ..publish import threads as threads_api
 from ..publish import x as x_api
 from . import board as B
@@ -562,6 +564,231 @@ X용 짧은 글
         check("장부 봉인: 다른 날은 점검만, 고친 흔적이 있으면 실패로 적는다", good and len(ran) == 1 and not ran[0][2]["ok"] and st["결과"].startswith("실패: 장부 점검에서 문제")
               and "entry_hash 불일치" in st["메모"], (good, ran, st))
         check("날짜 읽기: 줄표가 있든 없든, 파일 이름에서도", [str(J.as_date(x)) for x in ("2026-10-05", "20261005", "target_20261006.json", "주차 41")] == ["2026-10-05", "2026-10-05", "2026-10-06", "None"])
+
+    # --- 엔진 봉인: 발표 전날 낮부터 실행기를 부르고, 조종판에는 엔진별 상태만 적는다
+    with tempfile.TemporaryDirectory() as tmp:
+        board = B.CsvBoard(os.path.join(tmp, "board"))
+        for tab in (B.QUEUE, B.CANDIDATES, B.STATUS):
+            board.ensure(tab)
+        sched = os.path.join(tmp, "schedule_e.csv")
+        with open(sched, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["event_kind", "title_ko", "ref_period", "release_at_utc", "targets"])
+            w.writerow(["CPI", "소비자물가", "2099-01", "2099-02-11T13:30:00Z", "CPI_MOM CPI_CORE_MOM CPI_YOY"])   # 수요일 22:30 (한국 시간)
+            w.writerow(["PPI", "생산자물가", "2099-01", "2099-02-12T13:30:00Z", "PPI_FD_MOM"])
+            w.writerow(["EMP", "고용보고서", "2099-01", "2099-02-06T13:30:00Z", "NFP_CHG UNRATE"])
+            w.writerow(["CLAIMS", "주간 신규 실업수당 청구", "2099-02-07", "2099-02-12T13:30:00Z", "CLAIMS_INIT"])
+            w.writerow(["GDP_ADV", "GDP 속보치", "2098Q4", "2099-02-12T13:30:00Z", "GDP_ADV_QOQ"])
+            w.writerow(["CPI", "소비자물가", "2099-01", "2099-03-01T13:30:00Z", "CPI_MOM"])   # 겹친 줄
+            w.writerow(["CPI", "소비자물가", "2099-02", "읽을 수 없음", "CPI_MOM"])
+        cpi_at, ppi_at = datetime(2099, 2, 10, 5, 30, tzinfo=timezone.utc), datetime(2099, 2, 11, 14, 0, tzinfo=timezone.utc)
+        slots = {x.id: x for x in J.engine_slots(cpi_at, {"schedule": sched})}
+        check("엔진 봉인 예정: 묶음을 만들 수 있는 발표만, 발표 32시간 전부터 발표 때까지, 겹친 줄은 하나",
+              sorted(slots) == ["engine:CPI:2099-01", "engine:EMP:2099-01", "engine:PPI:2099-01"] and slots["engine:CPI:2099-01"].at == cpi_at
+              and slots["engine:EMP:2099-01"].at == datetime(2099, 2, 5, 5, 30, tzinfo=timezone.utc) and slots["engine:CPI:2099-01"].tries >= 96
+              and slots["engine:CPI:2099-01"].until == datetime(2099, 2, 11, 13, 30, tzinfo=timezone.utc) and slots["engine:CPI:2099-01"].gap == 20
+              and not slots["engine:CPI:2099-01"].ctx["wait"], [(x.id, x.at) for x in slots.values()])
+        check("엔진 봉인 예정: 묶음에 들어갈 다른 발표가 그 사이에 있으면 그 발표 30분 뒤부터",
+              slots["engine:PPI:2099-01"].at == ppi_at and [(x["title"], x["ref"]) for x in slots["engine:PPI:2099-01"].ctx["wait"]] == [("소비자물가", "2099-01")], slots["engine:PPI:2099-01"])
+        check("엔진 봉인은 작업표의 맨 뒤(남은 시간을 재서 쓴다)", J.JOBS[-1].id == "seal_forecasts" and J.JOBS[-1].item == "엔진 봉인")
+
+        only_engine = [j for j in J.JOBS if j.id == "seal_forecasts"]
+        clk, calls, answers, elog = SR.Clock(), [], [], []
+        status = lambda: {r["항목"]: r for r in board.read(B.STATUS)}.get("엔진 봉인", {})
+
+        def fake_run(kind, ref, o, env=None):
+            calls.append((kind, ref, dict(o)))
+            return answers.pop(0)
+
+        def world(name, **more):
+            return dict({"db": os.path.join(tmp, name + ".db"), "schedule": sched, "actuals": os.path.join(tmp, name + "_actuals.csv"), "no_ots": True,
+                         "clock": clk, "run_event": fake_run, "env": {}}, **more)
+        kw = dict(jobs=only_engine, board_opener=lambda: board, log=elog.append)
+        part = {"state": "pending", "ok": True, "result": "봉인함 · alpha@1 · CPI 2099-01 · 진행 중: beta@1 · 다시 돌리면 남은 것만 합니다", "memo": ["alpha@1: 맞는 답 5/5 · 받은 답 5"],
+                "calls": 7, "stamped": None, "engines": {"alpha@1": "sealed", "beta@1": "pending"}}
+        both = {"alpha@1": "sealed", "beta@1": "sealed"}
+        eo = world("e1")
+        check("때가 되기 전에는 부르지 않음", J.tick(now=cpi_at - timedelta(minutes=3), opts=eo, **kw) == [] and not calls)
+        answers[:] = [part]
+        ran = J.tick(now=cpi_at + timedelta(minutes=2), opts=eo, **kw)
+        st = status()
+        check("엔진 봉인: 한 엔진만 끝났으면 진행 중으로 적고 20분 뒤 이어서", len(ran) == 1 and ran[0][2]["done"] == set() and ran[0][2]["ok"]
+              and st.get("결과") == "진행 중 · 소비자물가 2099-01 · 봉인된 엔진 1/2: alpha@1 · 나머지: beta@1(진행 중)" and "20분 뒤 이어서" in st.get("메모", "")
+              and "맞는 답 5/5" in st["메모"] and "부른 횟수 7" in st["메모"], (ran, st))
+        o1 = calls[0][2]
+        check("엔진 봉인: 실행기에 쓸 시간 400초·엔진마다 5번 동시·폴더를 넘긴다", calls[0][:2] == ("CPI", "2099-01") and o1["budget_sec"] == 400 and o1["parallel"] == 5
+              and o1["db"] == eo["db"] and o1["schedule"] == sched and o1["no_ots"] is True, o1)
+        with open(os.path.join(store.ROOT, "scripts", "server_cron.sh"), encoding="utf-8") as f:
+            cron_line = [x for x in f.read().splitlines() if "pipeline.console.jobs tick >>" in x and x.lstrip()[:1].isdigit()]
+        check("엔진 봉인: 한 바퀴의 제한(600초)이 서버 예약 줄의 timeout 과 같다", len(cron_line) == 1 and " timeout %d " % J.TICK_LIMIT_SEC in cron_line[0]
+              and J.ENGINE_BUDGET_SEC + J.ENGINE_RESERVE_SEC < J.TICK_LIMIT_SEC, cron_line)
+        check("엔진 봉인: 간격(20분) 안에는 다시 부르지 않음", J.tick(now=cpi_at + timedelta(minutes=7), opts=eo, **kw) == [] and len(calls) == 1)
+        answers[:] = [{"state": "sealed", "ok": True, "result": "봉인함 · CPI 2099-01 · beta@1 · 묶음 abc…", "memo": [], "calls": 5, "stamped": False, "engines": both}]
+        ran = J.tick(now=cpi_at + timedelta(minutes=22), opts=eo, **kw)
+        st = status()
+        check("엔진 봉인: 봉인은 됐는데 외부 타임스탬프가 없으면 끝내지 않고 다시 받는다", ran[0][2]["done"] == set()
+              and st["결과"] == "봉인됨 · 소비자물가 2099-01 · 봉인된 엔진 2/2: alpha@1, beta@1 · 외부 타임스탬프는 아직", (ran, st))
+        answers[:] = [{"state": "already", "ok": True, "result": "이미 봉인됨 · CPI 2099-01 · alpha@1, beta@1", "memo": ["봉인: 타임스탬프 받음"], "calls": 0, "stamped": True, "engines": both}]
+        ran = J.tick(now=cpi_at + timedelta(minutes=42), opts=eo, **kw)
+        st = status()
+        check("엔진 봉인: 두 엔진이 봉인되고 타임스탬프까지 받으면 끝", ran[0][2]["done"] == {"engine:CPI:2099-01"}
+              and st["결과"] == "봉인됨 · 소비자물가 2099-01 · 봉인된 엔진 2/2: alpha@1, beta@1" and "다음: 수 2/11 23:00 생산자물가 2099-01 엔진 봉인" in st["메모"], (ran, st))
+        check("엔진 봉인: 끝난 발표는 다시 부르지 않음", J.tick(now=cpi_at + timedelta(minutes=62), opts=eo, **kw) == [] and J.tick(now=cpi_at + timedelta(hours=20), opts=eo, **kw) == []
+              and len(calls) == 3)
+
+        # 한 바퀴(600초)와 봇 집행 시간 앞에서 쓸 시간을 줄인다
+        calls.clear()
+        answers[:] = [part]
+        J.tick(now=cpi_at + timedelta(minutes=2), opts=world("e2", tick_started=clk() - 200), **kw)
+        ran = J.tick(now=cpi_at + timedelta(minutes=2), opts=world("e3", tick_started=clk() - 480), **kw)
+        st = status()
+        check("엔진 봉인: 같은 바퀴의 다른 작업이 쓴 시간만큼 줄이고, 모자라면 부르지 않고 미룬다", len(calls) == 1 and calls[0][2]["budget_sec"] == 290
+              and st["결과"] == "미룸 · 소비자물가 2099-01 — 이번 바퀴에 남은 시간이 모자람" and ran[0][2]["done"] == set() and ran[0][2]["ok"], (calls, st))
+        calls.clear()
+        answers[:] = [part, part]
+        tue = datetime(2099, 2, 10, 14, 12, tzinfo=timezone.utc)   # 화요일 23:12 (한국 시간). 23:20부터 봇 집행 시간
+        J.tick(now=tue, opts=world("e4"), **kw)
+        J.tick(now=tue + timedelta(minutes=5), opts=world("e5"), **kw)
+        J.tick(now=tue + timedelta(minutes=7), opts=world("e6"), **kw)
+        check("엔진 봉인: 봇 집행 시간 전에 봉인까지 끝나도록 쓸 시간을 줄이고, 바로 앞에서는 부르지 않는다", tue.astimezone(J.KST).weekday() == 1
+              and [c[2]["budget_sec"] for c in calls] == [370, 70] and status()["결과"].startswith("미룸"), (calls, status()))
+
+        calls.clear()
+        answers[:] = [part]
+        need = world("e7", call_seconds=lambda folder: 360)
+        J.tick(now=tue, opts=need, **kw)
+        J.tick(now=tue + timedelta(minutes=5), opts=dict(need, db=os.path.join(tmp, "e8.db")), **kw)
+        st = status()
+        check("엔진 봉인: 남은 시간이 레시피의 한 번 부르는 시간보다 짧으면 부르지 않고 미룬다(실패로 적지 않는다)", [c[2]["budget_sec"] for c in calls] == [370]
+              and st["결과"] == "미룸 · 소비자물가 2099-01 — 이번 바퀴에 남은 시간(70초)이 한 번 부르는 시간(360초)보다 짧음", (calls, st))
+        ran = J.tick(now=cpi_at + timedelta(minutes=2), opts=world("e9", call_seconds=lambda folder: 500), **kw)
+        st = status()
+        check("엔진 봉인: 레시피의 한 번 부르는 시간이 한 바퀴보다 길면 부르지 않고 사람에게 알린다", len(calls) == 1 and not ran[0][2]["ok"] and ran[0][2]["done"] == set()
+              and st["결과"].startswith("멈춤 · 소비자물가 2099-01 — 레시피의 한 번 부르는 시간(500초)"), st)
+        calls.clear()
+        J.tick(now=tue + timedelta(minutes=6, seconds=40), opts=world("e10", tick_started=clk() - 130), **kw)   # 23:18:40에 시작해 앞 작업이 130초를 썼다
+        check("엔진 봉인: 앞 작업이 길어져 봇 집행 시간 안으로 들어갔으면 부르지 않는다", not calls and status()["결과"].startswith("미룸") and J.seconds_to_quiet(tue + timedelta(minutes=9)) == -60
+              and J.seconds_to_quiet(tue + timedelta(minutes=40)) is None and J.seconds_to_quiet(tue - timedelta(days=1)) is None, (calls, status()))
+
+        def slow_job(now, due, o):   # 엔진 봉인보다 먼저 도는 작업이 200초를 썼다
+            clk.t += 200
+            return {"ok": True, "result": "끝", "memo": [], "done": {x.id for x in due}, "lines": []}
+        answers[:] = [part]
+        first_job = J.Job("log_edits", "고친 기록", lambda now, o: [J.Slot("edits:x", now - timedelta(seconds=1), now + timedelta(hours=1), 20, 2, "앞 작업", None)], slow_job)
+        J.tick(now=cpi_at + timedelta(minutes=2), opts=world("e11"), jobs=[first_job] + only_engine, board_opener=lambda: board, log=elog.append)
+        check("엔진 봉인: 같은 바퀴의 앞 작업이 쓴 시간을 일꾼이 재서 넘긴다", [c[2]["budget_sec"] for c in calls] == [290], calls)
+
+        # 끝날 때까지 20분마다 이어서 부른다
+        calls.clear()
+        lo = world("e12")
+        lo.pop("no_ots")
+        answers[:] = [dict(part, ok=False)] * 6 + [{"state": "already", "ok": True, "result": "이미 봉인됨", "memo": [], "calls": 0, "stamped": False, "engines": both}]
+        for i in range(7):
+            ran = J.tick(now=cpi_at + timedelta(minutes=2 + 20 * i), opts=lo, **kw)
+        st = status()
+        check("엔진 봉인: 끝날 때까지 20분마다 이어서 부르고, 오류가 있으면 결과 줄에 드러낸다", len(calls) == 7 and calls[0][2]["no_ots"] is False
+              and J.engine_line("소비자물가 2099-01", dict(part, ok=False)).startswith("진행 중(오류 있음) · 소비자물가 2099-01 · 봉인된 엔진 1/2"), (len(calls), st))
+        check("엔진 봉인: 앞서 봉인된 발표도 외부 타임스탬프가 없으면 끝내지 않는다", ran[0][2]["done"] == set() and st["결과"].endswith("외부 타임스탬프는 아직"), (ran, st))
+        check("엔진 봉인: 엔진 하나로만 봉인되면 결과 줄에 알린다", J.engine_line("소비자물가 2099-01", {"state": "sealed", "ok": True, "engines": {"alpha@1": "sealed"}})
+              == "봉인됨 · 소비자물가 2099-01 · 봉인된 엔진 1/1: alpha@1 · [주의] 이 발표에 쓰인 엔진이 1개뿐")
+
+        # 두 발표가 겹치면 바퀴마다 차례를 바꾼다
+        sched2 = os.path.join(tmp, "schedule_two.csv")
+        with open(sched2, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["event_kind", "title_ko", "ref_period", "release_at_utc", "targets"])
+            w.writerow(["CPI", "소비자물가", "2099-01", "2099-02-11T13:30:00Z", "CPI_MOM CPI_CORE_MOM CPI_YOY"])
+            w.writerow(["EMP", "고용보고서", "2099-01", "2099-02-11T13:30:00Z", "NFP_CHG UNRATE"])
+        calls.clear()
+        two = world("e13", schedule=sched2)
+
+        def busy_run(kind, ref, o, env=None):   # 먼저 돈 발표가 300초를 쓴다
+            calls.append((kind, ref, dict(o)))
+            clk.t += 300
+            return part
+        two["run_event"] = busy_run
+        for i in range(2):
+            J.tick(now=cpi_at + timedelta(minutes=2 + 20 * i), opts=two, **kw)
+        check("엔진 봉인: 두 발표가 겹치면 차례를 바꿔 가며 하고, 뒤의 발표는 남은 시간만 쓴다", [c[0] for c in calls] in (["CPI", "EMP", "EMP", "CPI"], ["EMP", "CPI", "CPI", "EMP"])
+              and [c[2]["budget_sec"] for c in calls] == [400, 190, 400, 190], [(c[0], c[2]["budget_sec"]) for c in calls])
+
+        # 묶음에 들어갈 발표값(PPI 전날의 CPI)이 수집될 때까지 기다린다
+        calls.clear()
+        po = world("p1")
+
+        def actuals(path, targets):
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["event_kind", "ref_period", "target", "actual"])
+                for t in targets:
+                    w.writerow(["CPI", "2099-01", t, "0.3"])
+        with open(po["actuals"], "wb") as f:   # 읽을 수 없는 파일도 "아직 수집되지 않음"으로 본다
+            f.write(b"\xff\xfe\x00garbage")
+        garbled = J.tick(now=ppi_at - timedelta(minutes=30), opts=po, **kw) == [] and J.run_engines(ppi_at + timedelta(minutes=1), [J.engine_slots(ppi_at, po)[-1]], po)["result"].startswith("기다리는 중")
+        actuals(po["actuals"], ["CPI_MOM", "CPI_YOY"])
+        ran = J.tick(now=ppi_at + timedelta(minutes=2), opts=po, **kw)
+        st = status()
+        check("엔진 봉인: 묶음에 들어갈 발표값이 아직 없으면 부르지 않고 기다린다", garbled and not calls and ran[0][2]["done"] == set() and ran[0][2]["ok"]
+              and st["결과"] == "기다리는 중 · 생산자물가 2099-01 — 소비자물가 2099-01 발표값이 아직 수집되지 않음", (calls, st))
+        actuals(po["actuals"], ["CPI_MOM", "CPI_CORE_MOM", "CPI_YOY"])
+        answers[:] = [dict(part, result="진행 중 · PPI 2099-01", engines={"alpha@1": "pending", "beta@1": "pending"})]
+        J.tick(now=ppi_at + timedelta(minutes=22), opts=po, **kw)
+        check("엔진 봉인: 발표값이 수집되면 부른다", [c[:2] for c in calls] == [("PPI", "2099-01")] and status()["결과"].startswith("진행 중 · 생산자물가 2099-01 · 봉인된 엔진 0/2 · 나머지"), (calls, status()))
+        calls.clear()
+        answers[:] = [dict(part, engines={"alpha@1": "pending", "beta@1": "pending"})]
+        late = datetime(2099, 2, 11, 22, 30, tzinfo=timezone.utc)   # PPI 봉인 마감 3시간 전
+        J.tick(now=late, opts=world("p2"), **kw)
+        check("엔진 봉인: 마감이 가까우면 더 기다리지 않고 있는 자료로 부른다", len(calls) == 1 and "소비자물가 2099-01 발표값 없이 부릅니다" in status()["메모"], (calls, status()))
+        answers[:] = [{"state": "missed", "ok": False, "result": "미제출 · PPI 2099-01 · 봉인 마감이 지남", "memo": [], "calls": 0, "stamped": None, "engines": {}}]
+        ran = J.tick(now=datetime(2099, 2, 12, 2, 0, tzinfo=timezone.utc), opts=world("p3"), **kw)   # PPI 봉인 마감 30분 뒤
+        check("엔진 봉인: 마감 뒤에는 기다리지 않고 실행기에 넘겨 닫는다", len(calls) == 2 and ran[0][2]["done"] == {"engine:PPI:2099-01"} and status()["결과"].startswith("미제출 · 생산자물가 2099-01 — 미제출")
+              and "발표값 없이" not in status()["메모"], (calls, status()))
+
+        # 미제출·멈춤
+        calls.clear()
+        answers[:] = [{"state": "missed", "ok": False, "result": "미제출 — 형식이 맞는 답이 모자람 · CPI 2099-01 · 미제출: alpha@1, beta@1", "memo": [], "calls": 0, "stamped": None,
+                       "engines": {"alpha@1": "missed", "beta@1": "missed"}}]
+        mo = world("m1")
+        final = datetime(2099, 2, 11, 1, 0, tzinfo=timezone.utc)
+        ran = J.tick(now=final, opts=mo, **kw)
+        st = status()
+        check("엔진 봉인: 미제출은 그대로 적고 다시 부르지 않는다", ran[0][2]["done"] == {"engine:CPI:2099-01"} and not ran[0][2]["ok"]
+              and st["결과"] == "미제출 · 소비자물가 2099-01 · 봉인된 엔진 0/2 · 나머지: alpha@1(미제출), beta@1(미제출)" and "뒤늦게 채우지 않습니다" in st["메모"]
+              and J.tick(now=final + timedelta(minutes=25), opts=mo, **kw) == [], (ran, st))
+        answers[:] = [{"state": "blocked", "ok": False, "result": "등록된 엔진이 없습니다. 레시피를 만든 뒤: register", "memo": [], "calls": 0, "stamped": None, "engines": {}}]
+        ran = J.tick(now=cpi_at + timedelta(minutes=2), opts=world("m2"), **kw)
+        st = status()
+        check("엔진 봉인: 하지 못한 이유를 그대로 적고 20분 뒤 다시 본다", ran[0][2]["done"] == set() and st["결과"].startswith("멈춤 · 소비자물가 2099-01 — 등록된 엔진이 없습니다")
+              and "20분 뒤 다시 시도 (1/" in st["메모"], (ran, st))
+        check("엔진 봉인: 한 엔진만 봉인되고 닫힌 발표는 '일부만'으로", J.engine_line("소비자물가 2099-01", {"state": "already", "engines": {"alpha@1": "sealed", "beta@1": "missed"}})
+              == "일부만 봉인됨 · 소비자물가 2099-01 · 봉인된 엔진 1/2: alpha@1 · 나머지: beta@1(미제출)")
+
+        # 실제 실행기와 가짜 API로 끝까지: 장부에 봉인되고, 조종판·로그에는 값이 없다
+        db = os.path.join(tmp, "facts.db")
+        con = store.connect(db)
+        parsed, _ = bls.parse(fake_response())
+        bls.ingest(con, parsed, "2020-01-01T00:00:00Z", None)
+        con.commit()
+        con.close()
+        wd = SR.World(tmp, "engine_job", db, sched)
+        wd.api.plan = {"anthropic": SR.good("anthropic", SR.CPI, SR.A_VALS), "openai": SR.good("openai", SR.CPI, SR.O_VALS)}
+        when = cpi_at + timedelta(minutes=2)
+        real = lambda kind, ref, o, env=None: R.run_event(kind, ref, o, now=when, env=wd.env, send=wd.api.send, sleep=lambda x: None, build=wd.build)
+        n0 = len(wd.ledger())
+        elog.clear()
+        ran = J.tick(now=when, opts=dict(wd.opts, run_event=real, secrets=J.secrets_of(wd.env)), **kw)
+        st = status()
+        con = store.connect(db)
+        shown = json.dumps(st, ensure_ascii=False) + "\n".join(elog) + "\n".join(r[0] or "" for r in con.execute("SELECT detail FROM job_run"))
+        con.close()
+        entries = wd.ledger()
+        check("엔진 봉인(실제 실행기): 두 엔진을 5번씩 부르고 장부에 봉인한다", len(ran) == 1 and ran[0][2]["done"] == {"engine:CPI:2099-01"} and wd.api.calls == {"anthropic": 5, "openai": 5}
+              and len(entries) == n0 + 1 and entries[-1]["kind"] == "forecast" and st["결과"] == "봉인됨 · 소비자물가 2099-01 · 봉인된 엔진 2/2: alpha@1, beta@1", (ran, wd.api.calls, st))
+        _, vals = wd.sealed_values(entries[-1])
+        check("엔진 봉인(실제 실행기): 조종판과 로그에 엔진이 낸 값·키가 없다", vals[("alpha", "CPI_MOM")]["p50"] == 0.37 and vals[("beta", "CPI_MOM")]["p50"] == 0.57
+              and not any(x in shown for x in ["%.2f" % (v + d) for v in SR.A_VALS + SR.O_VALS for d in (-0.1, 0, 0.1)] + ["KEY-A", "KEY-O"])
+              and "기록 #" in shown and "slot=engine:CPI:2099-01" in shown, shown)
+        check("엔진 봉인(실제 실행기): 다시 돌아도 부르지 않는다", J.tick(now=when + timedelta(minutes=25), opts=dict(wd.opts, run_event=real), **kw) == [] and wd.api.calls == {"anthropic": 5, "openai": 5})
 
     class FakeApi(Exception):
         pass
