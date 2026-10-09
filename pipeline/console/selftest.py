@@ -601,8 +601,10 @@ X용 짧은 글
             return answers.pop(0)
 
         def world(name, **more):
+            # 서버에는 진짜 레시피 폴더·장부·발표값 파일이 있다. 시험이 그것을 읽지 않게 자리를 모두 임시 폴더로 준다
             return dict({"db": os.path.join(tmp, name + ".db"), "schedule": sched, "actuals": os.path.join(tmp, name + "_actuals.csv"), "no_ots": True,
-                         "clock": clk, "run_event": fake_run, "env": {}}, **more)
+                         "engines_dir": os.path.join(tmp, "no_engines"), "ledger_dir": os.path.join(tmp, "no_ledger"), "private_dir": os.path.join(tmp, "no_private"),
+                         "runs_dir": os.path.join(tmp, "no_runs"), "clock": clk, "run_event": fake_run, "env": {}}, **more)
         kw = dict(jobs=only_engine, board_opener=lambda: board, log=elog.append)
         part = {"state": "pending", "ok": True, "result": "봉인함 · alpha@1 · CPI 2099-01 · 진행 중: beta@1 · 다시 돌리면 남은 것만 합니다", "memo": ["alpha@1: 맞는 답 5/5 · 받은 답 5"],
                 "calls": 7, "stamped": None, "engines": {"alpha@1": "sealed", "beta@1": "pending"}}
@@ -776,7 +778,8 @@ X용 짧은 글
         real = lambda kind, ref, o, env=None: R.run_event(kind, ref, o, now=when, env=wd.env, send=wd.api.send, sleep=lambda x: None, build=wd.build)
         n0 = len(wd.ledger())
         elog.clear()
-        ran = J.tick(now=when, opts=dict(wd.opts, run_event=real, secrets=J.secrets_of(wd.env)), **kw)
+        real_opts = dict(wd.opts, run_event=real, actuals=os.path.join(tmp, "facts_actuals.csv"), env=wd.env)
+        ran = J.tick(now=when, opts=dict(real_opts, secrets=J.secrets_of(wd.env)), **kw)
         st = status()
         con = store.connect(db)
         shown = json.dumps(st, ensure_ascii=False) + "\n".join(elog) + "\n".join(r[0] or "" for r in con.execute("SELECT detail FROM job_run"))
@@ -788,7 +791,7 @@ X용 짧은 글
         check("엔진 봉인(실제 실행기): 조종판과 로그에 엔진이 낸 값·키가 없다", vals[("alpha", "CPI_MOM")]["p50"] == 0.37 and vals[("beta", "CPI_MOM")]["p50"] == 0.57
               and not any(x in shown for x in ["%.2f" % (v + d) for v in SR.A_VALS + SR.O_VALS for d in (-0.1, 0, 0.1)] + ["KEY-A", "KEY-O"])
               and "기록 #" in shown and "slot=engine:CPI:2099-01" in shown, shown)
-        check("엔진 봉인(실제 실행기): 다시 돌아도 부르지 않는다", J.tick(now=when + timedelta(minutes=25), opts=dict(wd.opts, run_event=real), **kw) == [] and wd.api.calls == {"anthropic": 5, "openai": 5})
+        check("엔진 봉인(실제 실행기): 다시 돌아도 부르지 않는다", J.tick(now=when + timedelta(minutes=25), opts=real_opts, **kw) == [] and wd.api.calls == {"anthropic": 5, "openai": 5})
 
     class FakeApi(Exception):
         pass
