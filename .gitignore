@@ -22,3 +22,8 @@ data/forecast/actuals.csv
 keys/
 # 개인정보가 든 서류
 docs/*.pdf
+
+# 글꼴 (카드·영상을 만들 때 npm 으로 받는다)
+node_modules
+package-lock.json
+assets/cards/package.json

@@ -1,0 +1,133 @@
+/* 체크섬 카드 틀 — 1080×1350 (4:5). 글자와 숫자만으로 만든다. 사진·가격 차트·화살표는 쓰지 않는다.
+   색과 글꼴은 assets/brand/README.md 의 것 그대로다. 만드는 법은 이 폴더의 README.md. */
+:root {
+  --green: #0E9F7B;        /* 브랜드 초록. 큰 글자와 도형에만 (흰 바탕에서 대비 3.4:1) */
+  --green-deep: #0A7A5E;   /* 작은 초록 글자용 (흰 바탕에서 대비 5.3:1) */
+  --mint: #E9F6F3;
+  --ink: #17181A;
+  --gray: #5C6966;         /* 초록 쪽으로 기운 회색 */
+  --line: #BFDDD5;
+  --marker: #A5E2D1;      /* 형광펜 */
+  --white: #FFFFFF;
+  --side: 84px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #888; }
+body { font-family: 'Gothic A1', sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+.card {
+  position: relative; width: 1080px; height: 1350px; overflow: hidden;
+  background: var(--mint); color: var(--ink);
+  display: flex; flex-direction: column;
+  padding: 88px var(--side) 0;
+  word-break: keep-all; overflow-wrap: break-word;
+}
+.card.white { background: var(--white); }
+.card.green { background: var(--green); color: var(--white); }
+
+/* ── 머리: 코너 이름과 쪽 번호 ── */
+.head { display: flex; align-items: center; justify-content: space-between; height: 60px; flex: none; }
+.kicker { display: flex; align-items: center; gap: 18px; font-weight: 800; font-size: 40px; letter-spacing: -0.03em; }
+.kicker svg { width: 52px; height: 52px; flex: none; }
+.page { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 700; font-size: 34px; color: var(--gray); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.green .page { color: var(--ink); }
+.green .kicker { color: var(--ink); }   /* 초록 위의 작은 글자는 먹색(대비 5.3:1). 흰색은 큰 제목에만(3.35:1) */
+
+/* ── 몸 ── */
+.main { flex: 1; display: flex; flex-direction: column; justify-content: flex-start; gap: 52px; padding: 72px 0 44px; min-height: 0; }
+.main.mid { justify-content: center; padding-top: 20px; }
+.main > .note:last-child { margin-top: auto; }
+
+.title { font-weight: 800; font-size: 104px; line-height: 1.19; letter-spacing: -0.045em; }
+.title.m { font-size: 84px; line-height: 1.22; }
+.title.s { font-size: 66px; line-height: 1.26; letter-spacing: -0.04em; }
+.title em { font-style: normal; background: linear-gradient(transparent 62%, var(--marker) 62%, var(--marker) 94%, transparent 94%); padding: 0 .06em; margin: 0 -.06em; }
+.green .title em { color: var(--ink); background: none; padding: 0; margin: 0; }
+/* 제목 끝의 마침표: 로고의 둥근 점 */
+.dot { display: inline-block; width: .19em; height: .19em; border-radius: 50%; background: var(--green); margin-left: .06em; }
+.green .dot { background: var(--ink); }
+
+.sub { font-weight: 500; font-size: 50px; line-height: 1.5; letter-spacing: -0.03em; color: var(--gray); text-wrap: balance; }
+.green .sub { color: var(--ink); font-weight: 700; }
+.body { font-weight: 500; font-size: 56px; line-height: 1.52; letter-spacing: -0.035em; text-wrap: pretty; }
+.body p + p { margin-top: 44px; }
+.body strong, .sub strong { font-weight: 800; color: var(--ink); }
+.body em { font-style: normal; font-weight: 800; color: var(--green-deep); }
+.note { font-weight: 500; font-size: 36px; line-height: 1.5; letter-spacing: -0.025em; color: var(--gray); text-wrap: pretty; }
+
+/* ── 바뀌기 전과 후 ── */
+.shift { display: flex; flex-direction: column; gap: 34px; }
+.shift .row { border-radius: 36px; padding: 44px 52px 48px; display: flex; flex-direction: column; gap: 14px; }
+.shift .row.before { background: var(--white); }
+.shift .row.after { background: var(--green); color: var(--white); }
+.shift .when { font-weight: 800; font-size: 40px; letter-spacing: -0.03em; }
+.shift .before .when { color: var(--green-deep); }
+.shift .after .when { color: var(--ink); }
+.shift .val { font-weight: 800; font-size: 86px; line-height: 1.18; letter-spacing: -0.045em; white-space: nowrap; }
+.shift.long .val { font-size: 70px; }
+.shift .before .val { font-size: 70px; color: var(--ink); }
+.shift.long .before .val { font-size: 60px; }
+
+/* ── 숫자가 주인공인 줄 ── */
+.figs { display: flex; flex-direction: column; }
+.fig { display: grid; grid-template-columns: 1fr auto; align-items: baseline; column-gap: 28px; padding: 34px 0; border-top: 3px solid var(--line); }
+.fig:last-child { border-bottom: 3px solid var(--line); }
+.fig .lab { font-weight: 700; font-size: 46px; line-height: 1.35; letter-spacing: -0.035em; }
+.fig .lab small { display: block; font-weight: 500; font-size: 36px; color: var(--gray); margin-top: 6px; letter-spacing: -0.025em; }
+.fig .num { font-family: 'Plus Jakarta Sans', 'Gothic A1', sans-serif; font-weight: 800; font-size: 104px; line-height: 1; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fig .num .u { font-family: 'Gothic A1', sans-serif; font-size: .5em; font-weight: 800; letter-spacing: -0.03em; margin-left: .06em; }
+.fig.hi .num { color: var(--green); }
+.figs:not(.two) .fig { align-items: center; }
+.figs:not(.two) .fig.hi .num { font-size: 120px; }
+.figs.two .fig { grid-template-columns: 1fr auto auto; column-gap: 44px; }
+.figs.two .num { font-size: 76px; min-width: 230px; text-align: right; }
+.colhead { display: grid; grid-template-columns: 1fr auto auto; column-gap: 44px; padding-bottom: 18px; font-weight: 700; font-size: 34px; color: var(--gray); letter-spacing: -0.02em; }
+.colhead span:nth-child(n+2) { min-width: 230px; text-align: right; }
+
+/* ── 번호가 붙은 설명 한 장 ── */
+.ord { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 300px; line-height: .86; letter-spacing: -0.05em; color: var(--green); margin: 10px 0 40px -10px; }
+.term { font-weight: 800; font-size: 108px; line-height: 1.16; letter-spacing: -0.045em; }
+
+/* ── 한 장 정리 표 ── */
+.sheet { display: flex; flex-direction: column; }
+.sheet .r { display: grid; grid-template-columns: 250px 1fr; column-gap: 36px; padding: 32px 0; border-top: 3px solid var(--line); align-items: start; }
+.sheet .r:last-child { border-bottom: 3px solid var(--line); }
+.sheet .k { font-weight: 800; font-size: 44px; line-height: 1.3; letter-spacing: -0.035em; }
+.sheet .v { font-weight: 500; font-size: 42px; line-height: 1.5; letter-spacing: -0.03em; color: var(--gray); }
+.sheet .v b { display: block; font-weight: 800; font-size: 52px; line-height: 1.32; letter-spacing: -0.04em; color: var(--ink); }
+.sheet .v b em { font-style: normal; color: var(--green-deep); }
+
+/* ── 일정 줄 ── */
+.agenda { display: flex; flex-direction: column; gap: 30px; }
+.agenda .a { background: var(--white); border-radius: 36px; padding: 44px 52px; display: grid; grid-template-columns: auto 1fr; column-gap: 44px; align-items: center; }
+.agenda .t { font-family: 'Plus Jakarta Sans', 'Gothic A1', sans-serif; font-weight: 800; font-size: 84px; line-height: 1; letter-spacing: -0.04em; color: var(--green); font-variant-numeric: tabular-nums; }
+.agenda .d { font-weight: 800; font-size: 40px; letter-spacing: -0.03em; color: var(--green-deep); margin-bottom: 10px; }
+.agenda .n { font-weight: 800; font-size: 56px; line-height: 1.25; letter-spacing: -0.04em; }
+.agenda .n small { display: block; font-weight: 500; font-size: 36px; color: var(--gray); letter-spacing: -0.025em; margin-top: 4px; }
+
+/* ── 발: 워드마크와 고지 ── */
+.foot { flex: none; height: 132px; display: flex; align-items: center; justify-content: space-between; border-top: 3px solid var(--line); }
+.green .foot { border-top-color: rgba(255,255,255,.35); }
+
+.wm { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 40px; letter-spacing: -0.035em; }
+.wm i { font-style: normal; color: var(--green); }
+.legal { font-weight: 500; font-size: 30px; letter-spacing: -0.02em; color: var(--gray); }
+.green .legal { color: var(--ink); font-weight: 700; }
+.green .wm { color: var(--ink); }
+.green .wm i { color: var(--white); }
+
+/* 표지의 큰 체크: 로고의 체크와 마침표를 그대로 키운 것 */
+.bigcheck { position: absolute; right: -30px; bottom: 150px; width: 480px; height: 480px; opacity: .16; pointer-events: none; }
+.card.green .main { padding-top: 150px; gap: 60px; }
+.card.green .sub { max-width: 720px; font-size: 46px; text-wrap: wrap; }
+.card.green .title, .card.green .sub, .card.green .head, .card.green .foot { position: relative; z-index: 1; }
+
+/* 마지막 장의 고지 */
+.legalbox { border-radius: 36px; background: var(--white); padding: 44px 52px; font-weight: 500; font-size: 40px; line-height: 1.55; letter-spacing: -0.03em; color: var(--ink); }
+.legalbox b { font-weight: 800; }
+
+/* 촘촘한 카드: 숫자 두 칸짜리 표 */
+.dense .title.s { font-size: 60px; }
+.dense .main { gap: 40px; padding-top: 56px; }
+.dense .fig { padding: 28px 0; }
+.dense .note { font-size: 33px; }
