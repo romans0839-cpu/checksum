@@ -69,7 +69,10 @@ bash scripts/server_sync.sh                         # 서버: 새 코드 받기 
 bash scripts/server_cron.sh                         # 서버: 예약 세 줄 맞추기 (한 번). 예약 작업의 시각은 cron 이 아니라 pipeline/console/jobs.py 가 정한다
 python -m pipeline.forecast.bundle --event CPI --ref 2026-09   # 엔진에 줄 사실 묶음 만들기
 python -m pipeline.forecast.selftest                # 엔진 예측 봉인·채점 자체 시험 (실제 장부는 건드리지 않음)
-python -m pipeline.forecast.seal --file <예측.json>  # 예측 봉인 (발표 12시간 전까지)
+python -m pipeline.forecast.runner check            # 엔진 레시피 폴더 검사 (호출 없음). 레시피는 서버의 data/private/engines/ 에만 있다
+python -m pipeline.forecast.runner preview --event CPI --ref 2026-09   # 서버: 엔진마다 한 번 불러 형식·걸린 시간만 본다. 답은 저장도 표시도 하지 않는다
+python -m pipeline.forecast.runner run --event CPI --ref 2026-09       # 서버: 묶음 → 엔진 호출 → 합치기 → 봉인. 여러 번 돌려도 받은 답은 다시 받지 않는다
+python -m pipeline.forecast.seal --file <예측.json>  # 예측 봉인 (발표 12시간 전까지). 실행기가 부른다
 python -m pipeline.forecast.score                   # 봉인된 예측 채점
 ```
 

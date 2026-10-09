@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from ..ledger import commit as ledger_commit
 from ..ledger import core
 from ..ledger import verify as ledger_verify
-from . import engine, score, seal
+from . import engine, score, seal, selftest_runner
 
 
 def run(fn, argv, **kw):
@@ -29,7 +29,7 @@ def main():
 
     def check(name, cond, detail=""):
         ok.append(bool(cond))
-        print("%s %s%s" % ("  통과" if cond else "**실패", name, "" if cond else " — " + detail.strip()[-300:]))
+        print("%s %s%s" % ("  통과" if cond else "**실패", name, "" if cond else " — " + str(detail).strip()[-400:]))
 
     with tempfile.TemporaryDirectory() as tmp:
         led, prv, eng = (os.path.join(tmp, d) for d in ("ledger", "private", "engines"))
@@ -171,6 +171,8 @@ def main():
               and abs(float(by["alpha"]["interval_score"]) - 0.2) < 1e-9
               and abs(float(by["beta"]["interval_score"]) - (0.1 + 10 * 0.1)) < 1e-9, str(rows))
         check("요약에 표본 부족 표시", "표본 부족" in out and "alpha@1" in out and "오차가 작음 1 / 같음 0 / 큼 0" in out, out)
+
+    selftest_runner.run_checks(check)   # 엔진 실행기 (가짜 API)
 
     print("\n시험 %d건 중 %d건 통과" % (len(ok), sum(ok)))
     return 0 if all(ok) else 1

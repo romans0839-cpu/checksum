@@ -126,6 +126,8 @@ def validate(doc, reg, engines_dir, now, min_lead_hours):
                "forecasts": clean, "lead_hours": round(lead, 1)}
     if isinstance(doc.get("bundle_spec"), str):
         payload["bundle_spec"] = doc["bundle_spec"]   # 사실 묶음의 형식 버전 (pipeline/forecast/bundle.py)
+    if isinstance(doc.get("execution"), dict):
+        payload["execution"] = doc["execution"]       # 실행기가 남기는 기록: 보낸 글의 해시, 응답한 모델, 맞는 답의 수 (pipeline/forecast/runner.py). 원문에만 남는다
     return errs, payload
 
 
@@ -154,11 +156,14 @@ def main(argv=None, now=None):
     ap.add_argument("--ledger-dir", default=os.path.join(ROOT, "data", "ledger", "public"))
     ap.add_argument("--private-dir", default=os.path.join(ROOT, "data", "private", "ledger"))
     ap.add_argument("--engines-dir", default=os.path.join(ROOT, "data", "private", "engines"))
-    ap.add_argument("--min-lead-hours", type=float, default=12.0, help="봉인 마감: 발표 몇 시간 전까지 (기본 12)")
+    ap.add_argument("--min-lead-hours", type=float, default=12.0, help="봉인 마감: 발표 몇 시간 전까지 (기본 12, 그보다 작게는 안 됨)")
     ap.add_argument("--no-ots", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     now = now or datetime.now(timezone.utc)
+    if a.min_lead_hours < 12.0:   # 마감은 당길 수만 있다. 발표 12시간 전보다 늦게 봉인하는 길을 두지 않는다 (docs/12 §6)
+        print("[중단] 봉인 마감은 발표 12시간 전보다 늦출 수 없습니다 (--min-lead-hours 는 12 이상).")
+        return 2
 
     with open(a.file, encoding="utf-8-sig") as f:
         doc = json.load(f)
