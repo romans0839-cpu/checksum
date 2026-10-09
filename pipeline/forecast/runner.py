@@ -3,6 +3,7 @@
     python -m pipeline.forecast.runner check                              레시피 폴더 검사 (호출 없음)
     python -m pipeline.forecast.runner probe                              레시피의 모델을 짧게 한 번씩 불러 본다 (키·모델·잔액 확인. 레시피의 요청 항목은 보내지 않는다)
     python -m pipeline.forecast.runner render --event CPI --ref 2026-09   엔진에 줄 사실 표를 화면에 (호출 없음)
+    python -m pipeline.forecast.runner estimate --event CPI --ref 2026-09 쓸 토큰과 요금의 상한: 보낼 글의 토큰 수(API가 세어 준다. 무료)와 레시피의 출력 상한으로 계산. 엔진은 부르지 않는다
     python -m pipeline.forecast.runner preview --event CPI --ref 2026-09  미리 보기: 엔진마다 한 번 불러 형식만 본다. 답은 저장도 표시도 하지 않는다
     python -m pipeline.forecast.runner register --name adler --label 아들러 --version 1   레시피의 모델·횟수 그대로 장부에 등록
     python -m pipeline.forecast.runner run --event CPI --ref 2026-09      실제 실행: 묶음 → 엔진 호출 → 합치기 → 봉인
@@ -12,7 +13,7 @@
         {"format": "recipe/1", "provider": "anthropic" 또는 "openai", "model": "<모델 ID>",
          "n_runs": 5, "min_valid_runs": 3, "max_attempts": 2, "timeout_sec": 300,
          "render": "table/1", "answer": "json/1", "aggregate": "median",
-         "request": {<그 회사 API의 요청 항목. anthropic: max_tokens(필수)·thinking·output_config 등 / openai: max_output_tokens·reasoning 등>}}
+         "request": {<그 회사 API의 요청 항목. anthropic: max_tokens(필수)·thinking·output_config 등 / openai: max_output_tokens(필수)·reasoning 등>}}
     prompt.md     사용자 메시지 틀. {{FACTS}} 자리에 사실 표, {{ANSWER_FORMAT}} 자리에 답 형식이 들어간다
     system.md     시스템 지시문 (없어도 된다)
 
@@ -28,6 +29,8 @@
 - 등록 뒤 레시피 폴더가 바뀐 엔진은 부르지 않는다(다른 엔진은 그대로 간다).
 - 봉인 마감(발표 12시간 전)을 바꾸는 길이 없고, 사람이 값을 고치는 길도 없다. 합친 값은 발표 자릿수보다 한 자리 더 잘게 반올림할 뿐이다.
 - 발표 하나는 한 번에 한 실행만 다룬다(작업 폴더 잠금). 겹쳐 돌면 뒤의 것은 아무것도 하지 않는다.
+- 쓰는 토큰에는 상한이 있다: 한 번 부를 때 입력은 보낸 글 그대로, 출력은 레시피의 상한(max_tokens / max_output_tokens)까지.
+  발표 한 번에 엔진 하나가 받는 답은 많아야 n_runs × max_attempts 개다. estimate 가 이 상한을 토큰과 요금으로 보여 준다.
 
 작업 폴더 (data/private/forecast/runs/<발표>_<기간>/)
     plan.json                      이 발표에 쓰기로 한 엔진·버전. 처음 정한 대로 끝까지 간다
@@ -73,6 +76,9 @@ RECIPE_KEYS = ("format", "provider", "model", "n_runs", "min_valid_runs", "max_a
 ALLOWED_REQUEST = {"anthropic": ("max_tokens", "thinking", "output_config", "temperature", "top_p", "top_k", "stop_sequences", "service_tier"),
                    "openai": ("max_output_tokens", "reasoning", "text", "temperature", "top_p", "service_tier")}
 KEY_NAME = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+CAP_NAME = {"anthropic": "max_tokens", "openai": "max_output_tokens"}   # 한 번 부를 때 나오는 토큰(생각 포함)의 상한. 레시피에 반드시 적는다
+# 100만 토큰당 달러 (입력, 출력). estimate 의 어림에만 쓴다. 2026-10-09 요금표 기준 — Astra 는 공식 요금표에서 확인하지 못한 값이다(docs/12 §7)
+PRICES = {"claude-fable-5-1": (10.0, 50.0), "claude-opus-5-5": (4.0, 20.0), "gpt-6-astra": (10.0, 50.0)}
 MIN_LEAD_H = 12.0        # 봉인 마감: 발표 몇 시간 전까지. 실행기에는 이 값을 바꾸는 선택 항목이 없다 (docs/12 §6)
 FINAL_MARGIN_H = 1.0     # 마감이 이만큼 남으면 더 부르지 않고, 받은 답이 min_valid_runs 를 넘는 엔진은 그것으로 마무리한다
 ERRORS_PER_RUN = 2       # 한 번의 실행에서 한 번(run)이 겪어도 되는 오류 수. 넘으면 다음 실행으로 미룬다
@@ -149,9 +155,9 @@ def load_recipe(folder):
         allowed = ALLOWED_REQUEST[r["provider"]]
         for k in sorted(set(req) - set(allowed)):
             problems.append("request 에 넣을 수 없는 항목: %s (도구·검색은 켜지 않고, 모델·본문은 실행기가 채웁니다. 쓸 수 있는 것: %s)" % (k, ", ".join(allowed)))
-        m = req.get("max_tokens")
-        if r["provider"] == "anthropic" and not (isinstance(m, int) and not isinstance(m, bool) and m >= 256):
-            problems.append("anthropic 은 request.max_tokens 가 있어야 함(256 이상의 정수. 생각하는 토큰도 여기에 들어갑니다)")
+        cap = req.get(CAP_NAME[r["provider"]])
+        if not (isinstance(cap, int) and not isinstance(cap, bool) and 256 <= cap <= 64000):
+            problems.append("request.%s 가 있어야 함(256~64000 의 정수). 한 번 부를 때 나오는 토큰의 상한이고, 생각하는 토큰도 여기에 들어갑니다" % CAP_NAME[r["provider"]])
     texts = {}
     for name, needed in (("prompt.md", True), ("system.md", False)):
         p = os.path.join(folder, name)
@@ -213,9 +219,12 @@ def render_table_1(bundle):
                                                              " — " + prev["note"] if prev.get("note") else ""))
     ids = [t["target"] for t in bundle["targets"]]
     hist = {t: {h["period"]: h["value"] for h in bundle["history"].get(t, [])} for t in ids}
-    periods = sorted({p for t in ids for p in hist[t]})
-    out += ["", "## 맞힐 값의 과거 (오래된 기간부터)", "기간 | " + " | ".join(ids)]
-    out += ["%s | %s" % (p, " | ".join(_num(hist[t].get(p)) for t in ids)) for p in periods]
+    fine = {t: {h["period"]: h["value"] for h in rows} for t, rows in (bundle.get("history_fine") or {}).items() if t in ids and rows}
+    cols = [(t, hist[t]) for t in ids] + [(t + " 계산값", fine[t]) for t in ids if t in fine]
+    periods = sorted({p for _, got in cols for p in got})
+    out += ["", "## 맞힐 값의 과거 (오래된 기간부터)" + (". '계산값'은 발표된 지수로 같은 식을 다시 계산한 소수 둘째 자리 값" if fine else ""),
+            "기간 | " + " | ".join(name for name, _ in cols)]
+    out += ["%s | %s" % (p, " | ".join(_num(got.get(p)) for _, got in cols)) for p in periods]
     if bundle.get("components"):
         out += ["", "## 같은 발표의 구성 항목"] + _series_table(bundle["components"])
     for group in sorted(bundle.get("related") or {}):
@@ -942,8 +951,8 @@ def cmd_check(a):
             for p in problems:
                 print("   - " + p)
             continue
-        print("%s v%s — 형식 맞음 · %s · %s · %d번 가운데 %d번 이상 · %s · 해시 %s"
-              % (name, ver, recipe["provider"], recipe["model"], recipe["n_runs"], recipe["min_valid_runs"], where, digest[:16]))
+        print("%s v%s — 형식 맞음 · %s · %s · %d번 가운데 %d번 이상 · 한 번에 출력 최대 %d토큰 · %s · 해시 %s"
+              % (name, ver, recipe["provider"], recipe["model"], recipe["n_runs"], recipe["min_valid_runs"], recipe["request"][CAP_NAME[recipe["provider"]]], where, digest[:16]))
     return 2 if bad else 0
 
 
@@ -967,7 +976,7 @@ def cmd_probe(a, send=http_send, env=None):
             print("%s · %s — .env 에 %s 가 없음" % (provider, model, KEY_NAME[provider]))
             code = 1
             continue
-        recipe = {"provider": provider, "model": model, "answer": "json/1", "request": {"max_tokens": 64} if provider == "anthropic" else {"max_output_tokens": 64}}
+        recipe = {"provider": provider, "model": model, "answer": "json/1", "request": {CAP_NAME[provider]: 256}}
         rec = call_once(recipe, "", "OK 라고만 답하세요.", [], key, 120, send)
         if rec["status"] == "error":
             code = 1
@@ -1035,6 +1044,75 @@ def cmd_preview(a, send=http_send, env=None):
     return code
 
 
+def count_input_tokens(recipe, system, user, key, send=http_send):
+    """보낼 글의 입력 토큰 수를 그 회사 API에 물어본다(엔진을 부르지 않는다. 무료). 묻지 못하면 None."""
+    try:
+        if recipe["provider"] == "anthropic":
+            body = {"model": recipe["model"], "messages": [{"role": "user", "content": user}]}
+            if system:
+                body["system"] = system
+            url, headers = "https://api.anthropic.com/v1/messages/count_tokens", {"x-api-key": key, "anthropic-version": "2023-06-01"}
+        else:
+            body = {"model": recipe["model"], "input": [{"role": "user", "content": user}]}
+            if system:
+                body["instructions"] = system
+            url, headers = "https://api.openai.com/v1/responses/input_tokens", {"Authorization": "Bearer " + key}
+        status, doc, _err, _after = send(url, headers, body, 60)
+        return _count(doc.get("input_tokens")) if status == 200 and isinstance(doc, dict) else None
+    except Exception:
+        return None
+
+
+def usage_bounds(recipe, tokens_in):
+    """레시피와 입력 토큰 수로 정해지는 상한. 돌려주는 값의 토큰은 입력+출력 합계, 요금은 달러(요금표에 없는 모델이면 None)."""
+    cap, n, tries = recipe["request"][CAP_NAME[recipe["provider"]]], recipe["n_runs"], recipe["max_attempts"]
+    price = PRICES.get(recipe["model"])
+
+    def usd(calls, out_per_call):
+        return None if price is None else calls * (tokens_in * price[0] + out_per_call * price[1]) / 1e6
+
+    return {"cap": cap, "per_call": tokens_in + cap, "event": n * (tokens_in + cap), "worst": n * tries * (tokens_in + cap),
+            "usd_event": usd(n, cap), "usd_worst": usd(n * tries, cap), "usd_half": usd(n, cap / 2), "price": price}
+
+
+def cmd_estimate(a, send=http_send, env=None):
+    """레시피대로 돌리면 토큰을 얼마나 쓰는지: 입력은 세어 보고, 출력은 레시피의 상한으로 계산한다. 엔진은 부르지 않는다."""
+    env = envmod.load() if env is None else env
+    folders = _folders(a)
+    if not folders:
+        print("레시피 폴더가 없습니다: %s" % a.engines_dir)
+        return 2
+    bundle, problems = _bundle_now(a, datetime.now(timezone.utc))
+    if problems:
+        print("[중단] " + " / ".join(problems))
+        return 2
+    print("토큰 어림 — %s %s · 발표 한 번 기준. 엔진은 부르지 않았습니다." % (a.event, a.ref))
+    code, total_event, total_worst = 0, 0.0, 0.0
+    for name, ver, folder in folders:
+        recipe, problems = load_recipe(folder)
+        if problems:
+            code = 1
+            print("%s v%s — 레시피를 쓸 수 없음: %s" % (name, ver, " / ".join(problems)))
+            continue
+        system, user, _digest = build_prompt(recipe, bundle)
+        key = (env.get(KEY_NAME[recipe["provider"]]) or "").strip()
+        counted = count_input_tokens(recipe, system, user, key, send) if key else None
+        tokens_in = counted if counted is not None else len(system) + len(user)   # 못 세면 글자 수만큼으로 넉넉하게 잡는다(실제는 이보다 적다)
+        b = usage_bounds(recipe, tokens_in)
+        print("%s v%s (%s · %s) — 보낼 글 %d자 · 입력 %d토큰(%s)" % (name, ver, recipe["provider"], recipe["model"], len(system) + len(user), tokens_in,
+                                                               "API가 센 값" if counted is not None else "세지 못해 글자 수로 넉넉하게 잡음"))
+        print("   한 번 부를 때: 입력 %d + 출력 최대 %d(생각하는 토큰 포함. 넘으면 답이 끊기고 그 답은 쓰지 않는다)" % (tokens_in, b["cap"]))
+        print("   발표 한 번: %d번 불러 최대 %d토큰 · 형식이 틀린 답을 모두 다시 받는 최악은 %d번, %d토큰" % (recipe["n_runs"], b["event"], recipe["n_runs"] * recipe["max_attempts"], b["worst"]))
+        if b["price"]:
+            print("   요금(100만 토큰당 입력 $%g · 출력 $%g 로 어림): 발표 한 번 최대 $%.2f · 최악 $%.2f · 출력이 상한의 절반이면 $%.2f" % (b["price"] + (b["usd_event"], b["usd_worst"], b["usd_half"])))
+            total_event, total_worst = total_event + b["usd_event"], total_worst + b["usd_worst"]
+        else:
+            print("   요금: 이 모델의 요금이 코드의 요금표(PRICES)에 없어 계산하지 않음")
+    if total_event:
+        print("합계: 발표 한 번 최대 $%.2f · 최악 $%.2f. 실제로 나온 토큰은 preview 가 한 번 불러서 알려 줍니다." % (total_event, total_worst))
+    return code
+
+
 def cmd_register(a):
     if not re.match(r"^[1-9]\d{0,3}$", str(a.version)):
         print("[중단] 버전은 1, 2, 3 … 숫자로 적습니다.")
@@ -1065,14 +1143,14 @@ def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="엔진 실행기")
     sub = ap.add_subparsers(dest="cmd", required=True)
     cmds = {}
-    for name in ("check", "probe", "render", "preview", "register", "run"):
+    for name in ("check", "probe", "render", "estimate", "preview", "register", "run"):
         p = cmds[name] = sub.add_parser(name)
         p.add_argument("--engines-dir", default=os.path.join(ROOT, "data", "private", "engines"))
         p.add_argument("--ledger-dir", default=os.path.join(ROOT, "data", "ledger", "public"))
         p.add_argument("--private-dir", default=os.path.join(ROOT, "data", "private", "ledger"))
-    for name in ("check", "probe", "preview"):
+    for name in ("check", "probe", "estimate", "preview"):
         cmds[name].add_argument("--dir", action="append", help="레시피 폴더를 직접 지정(여러 번 쓸 수 있음). 없으면 엔진 폴더의 이름별 가장 높은 버전")
-    for name in ("render", "preview", "run"):
+    for name in ("render", "estimate", "preview", "run"):
         cmds[name].add_argument("--event", required=True, choices=sorted(T.EVENTS))
         cmds[name].add_argument("--ref", required=True, help="기준 기간 (예: 2026-09)")
         cmds[name].add_argument("--db", default=store.DEFAULT_DB)
@@ -1098,7 +1176,7 @@ def parse_args(argv=None):
 def main(argv=None):
     setup_console()
     a = parse_args(argv)
-    return {"check": cmd_check, "probe": cmd_probe, "render": cmd_render, "preview": cmd_preview, "register": cmd_register, "run": cmd_run}[a.cmd](a)
+    return {"check": cmd_check, "probe": cmd_probe, "render": cmd_render, "estimate": cmd_estimate, "preview": cmd_preview, "register": cmd_register, "run": cmd_run}[a.cmd](a)
 
 
 if __name__ == "__main__":

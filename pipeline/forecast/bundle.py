@@ -9,6 +9,8 @@
 - 제목 대조가 맞은 계열만 넣는다(--allow-unverified 로 풀 수 있지만 기록에 남는다).
 - 같은 DB·같은 마감 시각이면 항상 같은 파일, 같은 해시가 나온다. 해시는 봉인 기록에 들어간다.
 - 시장 예상치, 기사, 웹 검색 결과는 넣지 않는다 (D18).
+- 전월비·전년비는 발표값(소수 첫째 자리)과 함께, 발표된 지수로 다시 계산한 소수 둘째 자리 값도 넣는다(형식 0.2, D34).
+  0.24 와 0.16 은 발표값으로는 같은 0.2 다. 맞힐 값과 기준선은 발표값 그대로다.
 """
 import argparse
 import hashlib
@@ -16,12 +18,13 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
 from ..collect import catalog as C
 from ..collect import store
 from . import targets as T
 
-SPEC = "0.1"
+SPEC = "0.2"
 HISTORY_MONTHS = 36
 COMPONENT_MONTHS = 13
 UNITS = {"pc1": "%", "pc12": "%"}
@@ -51,6 +54,18 @@ def _tail(rows, ref_period, n):
     return picked[-n:]
 
 
+def _fine(con, bls_id, kind, cutoff):
+    """발표된 지수로 다시 계산한 전월비(pc1)·전년비(pc12), 소수 둘째 자리. {기간: 값}. 비교할 달의 지수가 없으면 그 달은 만들지 않는다."""
+    lag = 12 if kind == "pc12" else 1
+    level = {_period(d): v for d, v in store.asof(con, C.series_id(bls_id), cutoff)}
+    out = {}
+    for p, v in level.items():
+        old = level.get(_prev_period(p, lag))
+        if old:
+            out[p] = float(((Decimal(repr(v)) / Decimal(repr(old)) - 1) * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    return out
+
+
 def _verified(con, sid, allow_unverified):
     base = ".".join(sid.split(".")[:2])
     status = (store.get_meta(con, "series_check." + base) or "unknown").split("\t")[0]
@@ -65,7 +80,7 @@ def build(con, event_kind, ref_period, cutoff, release_at_utc=None, allow_unveri
         return None, ["기준 기간 표기가 맞지 않음: %r" % ref_period]
     problems, used, skipped = [], [], []
     tlist = [t for t, v in T.TARGETS.items() if v[0] == event_kind and t in C.TARGET_SERIES]
-    targets, history = [], {}
+    targets, history, history_fine = [], {}, {}
     for t in tlist:
         sid = C.target_series_id(t)
         ok, status = _verified(con, sid, allow_unverified)
@@ -86,6 +101,11 @@ def build(con, event_kind, ref_period, cutoff, release_at_utc=None, allow_unveri
                         "prev": dict(last, note=note)})
         history[t] = hist
         used.append(sid)
+        bls_id, kind = C.TARGET_SERIES[t]
+        if kind in ("pc1", "pc12"):   # 같은 기간들의 소수 둘째 자리 값(지수로 계산)
+            fine = _fine(con, bls_id, kind, cutoff)
+            history_fine[t] = [{"period": h["period"], "value": fine[h["period"]]} for h in hist if h["period"] in fine]
+            used.append(C.series_id(bls_id))
     if problems:
         return None, problems
 
@@ -100,11 +120,12 @@ def build(con, event_kind, ref_period, cutoff, release_at_utc=None, allow_unveri
             if not ok:
                 skipped.append("%s(%s)" % (sid, status))
                 continue
-            rows = _tail(store.asof(con, sid, cutoff), "9999-99" if group != event_kind else ref_period, months)
+            source = sorted(_fine(con, bls_id, "pc1", cutoff).items()) if kinds[0] == "pc1" else store.asof(con, sid, cutoff)
+            rows = _tail(source, "9999-99" if group != event_kind else ref_period, months)
             if rows:
-                label = {"pc1": "전월비 %", "nc1": "전월 대비 증감 (" + unit + ")", "": unit}[kinds[0]]
+                label = {"pc1": "전월비 % (지수로 계산, 소수 둘째 자리)", "nc1": "전월 대비 증감 (" + unit + ")", "": unit}[kinds[0]]
                 block.append({"series": bls_id, "name": name_ko, "measure": label, "values": rows})
-                used.append(sid)
+                used.append(C.series_id(bls_id) if kinds[0] == "pc1" else sid)
         return block
 
     bundle = {
@@ -113,9 +134,11 @@ def build(con, event_kind, ref_period, cutoff, release_at_utc=None, allow_unveri
         "data_cutoff_utc": cutoff,
         "targets": targets,
         "history": history,
+        "history_fine": history_fine,
         "components": group_block(event_kind, COMPONENT_MONTHS),
         "related": {g: group_block(g, COMPONENT_MONTHS) for g in C.RELATED[event_kind]},
-        "notes": ["모든 값은 자료 마감 시각까지 알려진 발표값입니다.", "기준 기간의 값은 들어 있지 않습니다.",
+        "notes": ["모든 값은 자료 마감 시각까지 알려진 발표값이거나, 그 발표값으로 계산한 값입니다.", "기준 기간의 값은 들어 있지 않습니다.",
+                  "전월비·전년비의 발표값은 소수 첫째 자리로 반올림되어 나옵니다. '지수로 계산'이라고 적힌 소수 둘째 자리 값은 발표된 지수로 같은 식을 다시 계산한 것입니다.",
                   "시장 예상치·기사·웹 검색 결과는 들어 있지 않습니다."],
     }
     if event_kind == "CPI":   # 전년비를 따질 재료: 원계열 지수의 직전 달·작년 같은 달 수준, 같은 달의 과거 전월비
@@ -125,12 +148,12 @@ def build(con, event_kind, ref_period, cutoff, release_at_utc=None, allow_unveri
             if not ok:
                 continue
             level = {_period(d): v for d, v in store.asof(con, C.series_id(bls_id), cutoff)}
-            mom = {_period(d): v for d, v in store.asof(con, C.series_id(bls_id, "pc1"), cutoff)}
+            mom = _fine(con, bls_id, "pc1", cutoff)   # 원계열 전월비도 소수 둘째 자리로
             same_month = [{"period": p, "value": v} for p, v in sorted(mom.items()) if p[5:7] == ref_period[5:7] and p < ref_period][-5:]
             base[bls_id] = {"index_prev_month": {"period": _prev_period(ref_period), "value": level.get(_prev_period(ref_period))},
                             "index_same_month_last_year": {"period": _prev_period(ref_period, 12), "value": level.get(_prev_period(ref_period, 12))},
                             "nsa_mom_same_month_past_years": same_month}
-            used += [C.series_id(bls_id), C.series_id(bls_id, "pc1")]
+            used.append(C.series_id(bls_id))
         bundle["yoy_ingredients"] = base
     bundle["coverage"] = {"series_used": sorted(set(used)), "series_skipped": sorted(set(skipped)), "allow_unverified": bool(allow_unverified)}
     return bundle, []

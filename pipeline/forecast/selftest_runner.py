@@ -22,20 +22,21 @@ from . import runner as R
 
 # 사실 표와 답 형식의 해시. 값이 달라졌다면 render·answer 를 고친 것이다 — 고치지 말고 새 번호(table/2, json/2)를 더한다.
 # 등록된 레시피는 옛 번호를 가리키므로, 옛 것이 바뀌면 "레시피가 그대로면 엔진이 본 것도 그대로"가 깨진다.
-PIN_TABLE_1 = "26f0acbbe09213aa925188ce0b86943f0556b3f2689aad1cb52b6e528ea61cb9"
+PIN_TABLE_1 = "dabbdafafbd82a57355e2cd366382a67a02f18ddd442875ca232dcaf9c820605"
 PIN_JSON_1 = "4db8da10322d77686cb804fb477aff5bfb32c0a34e9aefaa90687fdd10083fb0"
 
 FIXTURE = {
-    "bundle_spec": "CPI/0.1", "data_cutoff_utc": "2099-02-09T12:00:00Z",
+    "bundle_spec": "CPI/0.2", "data_cutoff_utc": "2099-02-09T12:00:00Z",
     "event": {"kind": "CPI", "title": "소비자물가", "ref_period": "2099-01", "release_at_utc": "2099-02-11T13:30:00Z"},
     "targets": [{"target": "CPI_MOM", "name": "CPI 전월비(계절조정)", "unit": "%", "decimals": 1, "prev": {"period": "2098-12", "value": 0.2, "note": ""}},
                 {"target": "CPI_YOY", "name": "CPI 전년비", "unit": "%", "decimals": 1, "prev": {"period": "2098-11", "value": 2.0, "note": "직전 달 값이 비어 있어 그보다 앞선 값입니다"}}],
     "history": {"CPI_MOM": [{"period": "2098-11", "value": 0.3}, {"period": "2098-12", "value": 0.2}], "CPI_YOY": [{"period": "2098-11", "value": 2.0}]},
-    "components": [{"series": "CUSR0000SA0E", "name": "에너지", "measure": "전월비 %", "values": [{"period": "2098-11", "value": -1.2}, {"period": "2098-12", "value": 0.4}]},
-                   {"series": "CUSR0000SAH1", "name": "주거", "measure": "전월비 %", "values": [{"period": "2098-12", "value": 0.3}]}],
+    "history_fine": {"CPI_MOM": [{"period": "2098-11", "value": 0.26}, {"period": "2098-12", "value": 0.16}], "CPI_YOY": []},
+    "components": [{"series": "CUSR0000SA0E", "name": "에너지", "measure": "전월비 % (지수로 계산, 소수 둘째 자리)", "values": [{"period": "2098-11", "value": -1.24}, {"period": "2098-12", "value": 0.4}]},
+                   {"series": "CUSR0000SAH1", "name": "주거", "measure": "전월비 % (지수로 계산, 소수 둘째 자리)", "values": [{"period": "2098-12", "value": 0.31}]}],
     "related": {"EMP": [{"series": "LNS14000000", "name": "실업률", "measure": "%", "values": [{"period": "2098-12", "value": 4.1}, {"period": "2099-01", "value": 4.2}]}], "PPI": []},
     "yoy_ingredients": {"CUUR0000SA0": {"index_prev_month": {"period": "2098-12", "value": 223.83}, "index_same_month_last_year": {"period": "2098-01", "value": None},
-                                        "nsa_mom_same_month_past_years": [{"period": "2098-01", "value": 0.3}]}},
+                                        "nsa_mom_same_month_past_years": [{"period": "2098-01", "value": 0.33}]}},
     "notes": ["모든 값은 자료 마감 시각까지 알려진 발표값입니다."],
     "coverage": {"series_used": [], "series_skipped": [], "allow_unverified": False},
 }
@@ -136,7 +137,7 @@ class World:
         self.common = ["--engines-dir", self.eng, "--ledger-dir", self.led, "--private-dir", self.prv]
         quiet(ledger_commit.main, ["--file", sig, "--signals-csv", os.path.join(base, "signals.csv"), "--no-ots"] + self.common[2:])
         write_recipe(os.path.join(self.eng, "alpha", "v1"))
-        write_recipe(os.path.join(self.eng, "beta", "v1"), provider="openai", model="model-o", request={"reasoning": {"effort": "high"}})
+        write_recipe(os.path.join(self.eng, "beta", "v1"), provider="openai", model="model-o", request={"max_output_tokens": 9000, "reasoning": {"effort": "high"}})
         self.registered = [quiet(R.main, ["register", "--name", n, "--label", lab, "--version", "1", "--no-ots"] + self.common)[0] for n, lab in (("alpha", "알파"), ("beta", "베타"))]
         self.api, self.builds, self.env = FakeApi(), [], dict(ENV)
         self.opts = {"ledger_dir": self.led, "private_dir": self.prv, "engines_dir": self.eng, "runs_dir": self.runs, "schedule": sched, "db": db, "no_ots": True}
@@ -163,12 +164,14 @@ def unit_checks(check, tmp):
     check("레시피: 형식이 맞으면 읽음", good_recipe is not None and not problems and good_recipe["system"] == "시험용 지시문", problems)
     _, p = R.load_recipe(write_recipe(os.path.join(tmp, "tools"), request={"max_tokens": 4000, "tools": [{"type": "web_search"}]}))
     check("레시피: 도구·검색을 켠 요청은 거부", any("tools" in x for x in p), p)
-    _, p = R.load_recipe(write_recipe(os.path.join(tmp, "oa"), provider="openai", request={"reasoning": {"effort": "high"}, "previous_response_id": "x", "store": True}))
+    _, p = R.load_recipe(write_recipe(os.path.join(tmp, "oa"), provider="openai", request={"max_output_tokens": 9000, "reasoning": {"effort": "high"}, "previous_response_id": "x", "store": True}))
     check("레시피: 이어 붙이거나 상대 서버에 남기는 요청은 거부", any("previous_response_id" in x for x in p) and any("store" in x for x in p), p)
-    _, p = R.load_recipe(write_recipe(os.path.join(tmp, "oatools"), provider="openai", request={"tools": [{"type": "web_search"}], "tool_choice": "auto", "truncation": "auto"}))
+    _, p = R.load_recipe(write_recipe(os.path.join(tmp, "oatools"), provider="openai", request={"max_output_tokens": 9000, "tools": [{"type": "web_search"}], "tool_choice": "auto", "truncation": "auto"}))
     check("레시피(openai): 도구·검색·입력 자르기는 거부", all(any(k in x for x in p) for k in ("tools", "tool_choice", "truncation")), p)
     _, p = R.load_recipe(write_recipe(os.path.join(tmp, "nomax"), request={}))
-    check("레시피: 필수 요청 항목이 없으면 거부", any("max_tokens" in x for x in p), p)
+    _, p2 = R.load_recipe(write_recipe(os.path.join(tmp, "nomax2"), provider="openai", request={"reasoning": {"effort": "high"}}))
+    _, p3 = R.load_recipe(write_recipe(os.path.join(tmp, "nomax3"), request={"max_tokens": 900000}))
+    check("레시피: 출력 상한이 없거나 터무니없으면 거부(쓸 토큰이 미리 정해지게)", any("max_tokens" in x for x in p) and any("max_output_tokens" in x for x in p2) and p3, (p, p2, p3))
     _, p = R.load_recipe(write_recipe(os.path.join(tmp, "render"), render="table/9"))
     check("레시피: 모르는 사실 표 번호는 거부", any("render" in x for x in p), p)
     _, p = R.load_recipe(write_recipe(os.path.join(tmp, "types"), provider=["anthropic"], n_runs=5.0, max_attempts=True))
@@ -192,7 +195,8 @@ def unit_checks(check, tmp):
     check("사실 표 table/1 이 그대로임 (달라졌다면 새 번호를 더할 것)", digest == PIN_TABLE_1, digest)
     digest = hashlib.sha256(R.answer_text_json_1(FIXTURE).encode("utf-8")).hexdigest()
     check("답 형식 json/1 이 그대로임 (달라졌다면 새 번호를 더할 것)", digest == PIN_JSON_1, digest)
-    check("사실 표: 빈 값은 – 로 적힘", "2098-12 | 0.2 | –\n" in table and "| – | 0.3\n" in table and "(2098-01) – |" in table, table)
+    check("사실 표: 발표값 옆에 지수로 계산한 값, 빈 값은 – 로", "기간 | CPI_MOM | CPI_YOY | CPI_MOM 계산값\n" in table and "2098-12 | 0.2 | – | 0.16\n" in table
+          and "| – | 0.31\n" in table and "(2098-01) – |" in table, table)
     system, user, d1 = R.build_prompt(good_recipe, FIXTURE)
     check("보내는 글: 자리 표시가 남지 않고 해시가 정해짐", "{{" not in user and table in user and len(d1) == 64 and d1 == R.build_prompt(good_recipe, FIXTURE)[2])
     cases = [([(0.1, 0.2, 0.5), (0.2, 0.3, 0.4), (0.2, 0.31, 0.6), (0.3, 0.4, 0.45), (0.0, 0.33, 0.9)], 1, (0.2, 0.31, 0.5)),   # 다섯 번: 자리마다 가운데 값
@@ -396,7 +400,7 @@ def flow_checks(check, tmp, db, sched):
     res = w.go()
     check("실행: 키가 없는 엔진은 기다리고(알림), 키가 있는 엔진은 봉인", res["state"] == "pending" and res["ok"] is False and res["engines"] == {"alpha@1": "sealed", "beta@1": "pending"}
           and "OPENAI_API_KEY" in said(res) and w.api.calls == {"anthropic": 5, "openai": 0} and w.api.bodies[0][1]["x-api-key"] == "KEY-A-SECRET-VALUE", res)
-    write_recipe(os.path.join(w.eng, "beta", "v2"), provider="openai", model="model-o2", request={})
+    write_recipe(os.path.join(w.eng, "beta", "v2"), provider="openai", model="model-o2", request={"max_output_tokens": 9000})
     quiet(R.main, ["register", "--name", "beta", "--label", "베타", "--version", "2", "--no-ots"] + w.common)
     w.env = dict(ENV)
     res = w.go(T0 + timedelta(minutes=20))
@@ -480,7 +484,7 @@ def flow_checks(check, tmp, db, sched):
 
     # --- 8. 엔진 고르기(가장 높은 버전, 자동 호출만), 답을 남길 수 없는 폴더, 답을 받기 전의 엔진 목록
     w = World(tmp, "choose", db, sched)
-    write_recipe(os.path.join(w.eng, "beta", "v2"), provider="openai", model="model-o2", request={})
+    write_recipe(os.path.join(w.eng, "beta", "v2"), provider="openai", model="model-o2", request={"max_output_tokens": 9000})
     quiet(R.main, ["register", "--name", "beta", "--label", "베타", "--version", "2", "--no-ots"] + w.common)
     write_recipe(os.path.join(w.eng, "delta", "v1"))
     quiet(E.main, ["register", "--name", "delta", "--version", "1", "--model", "m", "--mode", "manual", "--dir", os.path.join(w.eng, "delta", "v1"), "--no-ots"] + w.common[2:])
@@ -581,6 +585,20 @@ def flow_checks(check, tmp, db, sched):
           and "형식이 틀림" in out and "max_output_tokens" in out and "중괄호 있음" in out, out)
     check("미리 보기: 답의 값도 글도 찍지 않고 아무것도 저장하지 않음", "0.37" not in out and "0.57" not in out and "낮은" not in out and "SECRET" not in out
           and files_before == files_after, out)
+    asked = []
+
+    def counter(url, headers, body, timeout):   # 토큰을 세어 주는 주소만 흉내 낸다. 한 회사는 세어 주고 한 회사는 실패한다
+        asked.append(url)
+        return (200, {"input_tokens": 5000}, ("", ""), None) if "count_tokens" in url else (404, None, ("not_found", ""), None)
+
+    argv = ["estimate", "--event", "CPI", "--ref", "2099-01", "--db", db, "--schedule", sched] + w.common
+    code, out = quiet(lambda: R.cmd_estimate(R.parse_args(argv), send=counter, env=ENV))
+    check("명령 estimate: 엔진을 부르지 않고 입력은 세어서, 출력은 레시피의 상한으로", code == 0 and w.api.calls == {"anthropic": 2, "openai": 1}
+          and all(u.endswith(("/count_tokens", "/input_tokens")) for u in asked) and "입력 5000토큰(API가 센 값)" in out and "글자 수로 넉넉하게" in out
+          and "5번 불러 최대 45000토큰" in out and "최악은 10번, 90000토큰" in out, out)
+    b = R.usage_bounds(dict(RECIPE, model="claude-fable-5-1", request={"max_tokens": 16000}), 6000)
+    check("토큰 상한 계산: 한 번·발표 한 번·최악, 요금 어림", (b["per_call"], b["event"], b["worst"]) == (22000, 110000, 220000)
+          and [round(b[k], 2) for k in ("usd_event", "usd_worst", "usd_half")] == [4.3, 8.6, 2.3], b)
     code, out = quiet(lambda: R.cmd_probe(R.parse_args(["probe"] + w.common), send=w.api.send, env=ENV))
     check("명령 probe: 레시피의 모델을 한 번씩", code == 0 and out.count("닿음") == 3 and "0.37" not in out and "낮은" not in out, out)
 

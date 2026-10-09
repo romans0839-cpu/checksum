@@ -6,7 +6,7 @@
 
 ## 먼저 읽을 것
 0. `plan/status.md` — **진행 중 항목·대기 사유·다음 행동**. 세션 시작 시 가장 먼저 읽고, 상태가 바뀌면 즉시 갱신(주간 리뷰를 기다리지 않음)
-1. `plan/decisions.md` — 확정된 결정(D1~D33). 이와 충돌하는 제안을 하기 전에 반드시 근거를 제시하고 결정 항목을 새로 추가할 것
+1. `plan/decisions.md` — 확정된 결정(D1~D34). 이와 충돌하는 제안을 하기 전에 반드시 근거를 제시하고 결정 항목을 새로 추가할 것
 2. `plan/roadmap_2026Q4.md` — 현재 주차의 할 일
 3. `docs/03_regulation_checklist.md` — 규제 제약. 모든 콘텐츠·기능 제안은 이 문서를 위반하면 안 됨
 
@@ -70,6 +70,7 @@ bash scripts/server_cron.sh                         # 서버: 예약 세 줄 맞
 python -m pipeline.forecast.bundle --event CPI --ref 2026-09   # 엔진에 줄 사실 묶음 만들기
 python -m pipeline.forecast.selftest                # 엔진 예측 봉인·채점 자체 시험 (실제 장부는 건드리지 않음)
 python -m pipeline.forecast.runner check            # 엔진 레시피 폴더 검사 (호출 없음). 레시피는 서버의 data/private/engines/ 에만 있다
+python -m pipeline.forecast.runner estimate --event CPI --ref 2026-09  # 서버: 레시피대로 돌리면 쓰는 토큰·요금의 상한 (엔진을 부르지 않는다, D34)
 python -m pipeline.forecast.runner preview --event CPI --ref 2026-09   # 서버: 엔진마다 한 번 불러 형식·걸린 시간만 본다. 답은 저장도 표시도 하지 않는다
 python -m pipeline.forecast.runner run --event CPI --ref 2026-09       # 서버: 묶음 → 엔진 호출 → 합치기 → 봉인. 여러 번 돌려도 받은 답은 다시 받지 않는다
 python -m pipeline.forecast.seal --file <예측.json>  # 예측 봉인 (발표 12시간 전까지). 실행기가 부른다

@@ -14,6 +14,7 @@ python -m pipeline.forecast.bundle --event CPI --ref 2026-09   두 엔진에 줄
 python -m pipeline.forecast.runner check                  레시피 폴더 검사 (호출 없음)
 python -m pipeline.forecast.runner probe                  레시피의 모델을 짧게 한 번씩 불러 본다 (키·모델·잔액 확인)
 python -m pipeline.forecast.runner render --event CPI --ref 2026-09    엔진에 줄 사실 표를 화면에 (호출 없음)
+python -m pipeline.forecast.runner estimate --event CPI --ref 2026-09  쓰는 토큰·요금의 상한: 보낼 글의 토큰 수(API가 센다, 무료) + 레시피의 출력 상한. 엔진은 부르지 않는다
 python -m pipeline.forecast.runner preview --event CPI --ref 2026-09   미리 보기: 엔진마다 한 번 불러 형식만 본다. 답은 저장도 표시도 하지 않는다
 python -m pipeline.forecast.runner register --name adler --label 아들러 --version 1   레시피의 모델·횟수 그대로 장부에 등록
 python -m pipeline.forecast.runner run --event CPI --ref 2026-09       실제 실행: 묶음 → 엔진 호출 → 합치기 → 봉인 (여러 번 돌려도 받은 답은 다시 받지 않는다)
@@ -44,7 +45,7 @@ python scripts/engine_cost.py                             비용 어림
   "event": {"kind": "CPI", "ref_period": "2026-09", "release_at_utc": "2026-10-14T12:30:00Z"},
   "data_cutoff_utc": "2026-10-12T12:00:00Z",
   "bundle_sha256": "<두 엔진에 준 사실 묶음 파일의 sha256>",
-  "bundle_spec": "CPI/0.1",
+  "bundle_spec": "CPI/0.2",
   "forecasts": [
     {"engine": "adler", "version": "1", "target": "CPI_MOM", "p10": 0.2, "p50": 0.3, "p90": 0.4, "n_runs": 5},
     {"engine": "fletcher", "version": "1", "target": "CPI_MOM", "p10": 0.2, "p50": 0.35, "p90": 0.5, "n_runs": 5},
@@ -64,7 +65,9 @@ python scripts/engine_cost.py                             비용 어림
 | `prompt.md` | 사용자 메시지 틀. `{{FACTS}}` 자리에 사실 표, `{{ANSWER_FORMAT}}` 자리에 답 형식이 들어간다 |
 | `system.md` | 시스템 지시문 (없어도 된다) |
 
-- `request`에는 정해 둔 항목만 넣을 수 있다. anthropic: `max_tokens`(필수) `thinking` `output_config` `temperature` `top_p` `top_k` `stop_sequences` `service_tier` / openai: `max_output_tokens` `reasoning` `text` `temperature` `top_p` `service_tier`. 도구·웹 검색·이어 붙이기는 넣을 수 없다.
+- `request`에는 정해 둔 항목만 넣을 수 있다. anthropic: `max_tokens`(필수) `thinking` `output_config` `temperature` `top_p` `top_k` `stop_sequences` `service_tier` / openai: `max_output_tokens`(필수) `reasoning` `text` `temperature` `top_p` `service_tier`. 도구·웹 검색·이어 붙이기는 넣을 수 없다.
+- **출력 상한(`max_tokens` / `max_output_tokens`)은 반드시 적는다(D34).** 한 번 부를 때 나오는 토큰(생각하는 토큰 포함)의 상한이다. 그래서 발표 한 번에 엔진 하나가 쓰는 토큰은 많아야 `n_runs × max_attempts × (입력 + 상한)`이다. `estimate`가 이 숫자를 보여 준다. 상한에 걸려 끊긴 답은 쓰지 않으므로(형식이 틀린 답) 너무 낮게 잡으면 미제출이 된다 — `preview`의 "끝난 이유"와 출력 토큰 수로 확인한다.
+- `claude-fable-5-1`은 생각하기가 늘 켜져 있고(`thinking`을 적지 않아도 adaptive), `temperature`·`top_p`·`top_k`를 기본값이 아닌 값으로 주면 400 오류가 난다. 깊이는 `output_config.effort`(low·medium·high·xhigh·max, 기본 high)로 정한다.
 - `timeout_sec`은 한 번 부르는 데 기다리는 시간이다. 서버의 예약 작업은 한 번에 10분을 넘지 못하므로 300 안팎으로 잡는다. 실제로 걸리는 시간은 미리 보기가 알려 준다.
 - 사실 표(`table/1`)·답 형식(`json/1`)·합치기(`median`)는 코드에 있고 자체 시험이 지킨다. 고칠 때는 새 번호를 더하고 엔진을 새 버전으로 등록한다.
 - 등록하기 전에 `check` → `preview`로 본다. 등록한 뒤에는 폴더의 어떤 파일도 고칠 수 없다(고치면 그 엔진은 불리지 않는다).

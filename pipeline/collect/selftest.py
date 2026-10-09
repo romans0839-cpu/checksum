@@ -99,6 +99,11 @@ def main():
             check("묶음: 기준선이 될 직전 값과 전년비 재료", all(t["prev"]["period"] == "2098-12" for t in b1["targets"])
                   and b1["yoy_ingredients"]["CUUR0000SA0"]["index_same_month_last_year"]["period"] == "2098-01"
                   and b1["yoy_ingredients"]["CUUR0000SA0"]["index_prev_month"]["value"] is not None, b1["targets"])
+            fine, comp0 = b1["history_fine"], b1["components"][0]
+            check("묶음: 지수로 다시 계산한 소수 둘째 자리 전월비·전년비 (발표값 0.2 ↔ 계산값 0.16)", fine["CPI_MOM"][-1] == {"period": "2098-12", "value": 0.16}
+                  and b1["history"]["CPI_MOM"][-1]["value"] == 0.2 and len(fine["CPI_MOM"]) == 36 and fine["CPI_YOY"][-1]["period"] == "2098-12"
+                  and "둘째 자리" in comp0["measure"] and comp0["values"][-1]["value"] == 0.16 and b1["targets"][0]["prev"]["value"] == 0.2
+                  and b1["bundle_spec"] == "CPI/0.2", (fine["CPI_MOM"][-2:], comp0["measure"]))
             check("묶음: 관련 묶음(생산자물가·고용) 포함", len(b1["related"]["PPI"]) == 4 and len(b1["related"]["EMP"]) == 6, {k: len(v) for k, v in b1["related"].items()})
             again, _ = bundle.build(con, "CPI", "2099-01", "2099-01-20T00:00:00Z", "2099-02-11T13:30:00Z")
             check("같은 DB·같은 마감이면 같은 해시", hashlib.sha256(bundle.dumps(b1)).hexdigest() == hashlib.sha256(bundle.dumps(again)).hexdigest())
