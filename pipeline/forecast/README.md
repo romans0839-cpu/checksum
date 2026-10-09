@@ -98,10 +98,11 @@ python scripts/engine_cost.py                             비용 어림
 
 서버의 예약 작업 "엔진 봉인"(`pipeline/console/jobs.py`, docs/12 §7-2)이 발표 32시간 전(한국 시간 전날 13:30쯤)부터 20분마다 `run_event`를 부른다. 한 바퀴에 엔진 호출에 쓰는 시간은 400초까지이고 `timeout_sec`이 395초를 넘는 레시피는 부르지 못한다(조종판에 "멈춤"으로 적힌다). 결과는 조종판 "오늘 현황"의 "엔진 봉인" 줄에 엔진별 상태로만 적힌다. `runner run`을 손으로 돌릴 일은 없다 — 돌린다면 `flock -w 100 ~/logs/worker.lock`을 앞에 붙인다.
 
+지금 등록된 엔진(서버, 10/10): adler v1 `24c9f2cb1ab35cd1` · fletcher v1 `be78acecbd1c4269`. 레시피를 바꾸려면 `v2` 폴더를 만들어 새 버전으로 등록한다.
+
 ## 아직 없는 것
 
 - 경제분석국·에너지정보청·노동부 수집기 (노동통계국은 `pipeline/collect/`에 있음)
-- 엔진 등록 — 레시피 v1은 서버에 놓였고 `probe`·`preview`가 실제 API로 정상이었다(10/9 20:16). 등록(`runner register`)이 남았다
 - 도전자 버전을 현 버전과 함께 돌리는 것 — 지금은 이름마다 가장 높은 버전만 고른다(`run --engines`로 직접 줄 수는 있다)
 - 시장 예상치 내부 기록의 봉인 (docs/12 §6)
 - 발표 뒤 원문 공개(`reveal`)와 DB 표(`forecast`, `forecast_score`)로 옮겨 싣기
