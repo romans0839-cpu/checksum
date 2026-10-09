@@ -1,9 +1,11 @@
 <!doctype html>
 <html lang="ko"><head><meta charset="utf-8">
-<!-- 타이포 영상 시안: 레버리지의 산수 (1080×1920, 25.5초, 소리 없음).
-     글은 data/sns/drafts/2026-10-09_two_weeks_v2.md 의 b-1016-1200 에서 옮겼다. 숫자는 계산 예시다:
-     0.97 × (1/0.97) = 1 (지수), 0.91 × 1.092784 = 0.994433 (3배), 20번이면 0.89436 → −10.6%.
-     만드는 법: python assets/video/render.py assets/video/leverage_math.html --seconds 25.5
+<!-- 타이포 영상: 3배 레버리지 (1080×1920). 읽는 목소리의 시각표(window.TIMING)가 있으면 장면이 그 시각에 맞춰지고,
+     없으면 아래 기본 시각으로 돈다(소리 없는 판).
+     글은 data/sns/drafts/2026-10-09_two_weeks_v2.md 의 b-1016-1200 에서 옮기고 쉽게 풀었다(Nick 10/10: "보수가 아니라 산수가 그렇다" 같은 말은 풀어서).
+     숫자는 계산 예시다: 0.97 × (1/0.97) = 1 (지수), 0.91 × 1.092784 = 0.994433 (3배), 20번이면 0.89436 → −10.6%.
+     만드는 법: python assets/video/voice.py assets/video/leverage_math.voice.json
+               python assets/video/render.py assets/video/leverage_math.html --voice
      글자는 릴스·쇼츠의 화면 단추에 가리지 않는 자리(위 270px, 아래 670px, 양옆 65px 밖)에만 둔다. -->
 <link rel="stylesheet" href="../cards/node_modules/@fontsource/gothic-a1/500.css">
 <link rel="stylesheet" href="../cards/node_modules/@fontsource/gothic-a1/700.css">
@@ -33,7 +35,6 @@ html, body { background:#000; }
 .panel { background:#fff; border-radius:44px; padding:44px 56px 50px; display:flex; align-items:center; justify-content:space-between; }
 .panel + .panel { margin-top:32px; }
 .panel .lab { font-weight:800; font-size:52px; letter-spacing:-0.035em; line-height:1.3; }
-.panel .lab small { display:block; font-weight:500; font-size:38px; color:var(--gray); letter-spacing:-0.025em; }
 .panel .num { font-size:150px; }
 .panel.hot .num { color:var(--green); }
 .dots { display:grid; grid-template-columns:repeat(10, 1fr); gap:20px 0; margin-top:44px; }
@@ -45,118 +46,121 @@ html, body { background:#000; }
 .wm i { font-style:normal; color:var(--green); }
 #mark path { stroke-dasharray:70; stroke-dashoffset:70; }
 #mark circle { transform-origin:77px 66px; transform:scale(0); }
+#aivoice { display:none; }
 </style></head><body>
 <div id="stage">
   <div id="wash"></div>
   <svg id="deco" viewBox="0 0 100 100"><path fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" d="M24 52 L39 67 L66 33"/><circle cx="77" cy="66" r="6.5" fill="currentColor"/></svg>
   <div id="dwm">checksum<i>.</i></div>
-  <div class="kicker a" data-in="0" data-out="22.0" id="kick">
-    <svg viewBox="0 0 100 100" id="kmark"><rect id="kbg" width="100" height="100" rx="26" fill="#0E9F7B"/><path id="kfg" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" d="M24 52 L39 67 L66 33"/><circle id="kdot" cx="77" cy="66" r="6.5" fill="#fff"/></svg>
-    <span>레버리지의 산수</span>
+  <div class="kicker" id="kick">
+    <svg viewBox="0 0 100 100"><rect id="kbg" width="100" height="100" rx="26" fill="#0E9F7B"/><path id="kfg" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" d="M24 52 L39 67 L66 33"/><circle id="kdot" cx="77" cy="66" r="6.5" fill="#fff"/></svg>
+    <span>3배 레버리지</span>
   </div>
 
-  <!-- A 0–2.7 -->
+  <!-- data-s 장면, data-at 그 장면 안에서 나타나는 자리(0~1) -->
   <div class="scene">
-    <div class="big a" data-in="0.15" data-out="2.55">지수는</div>
-    <div class="big a" data-in="0.45" data-out="2.6">제자리로</div>
-    <div class="big a" data-in="0.75" data-out="2.65">돌아왔는데,</div>
+    <div class="big a" data-s="A" data-at="0.04">지수는</div>
+    <div class="big a" data-s="A" data-at="0.2">제자리로</div>
+    <div class="big a" data-s="A" data-at="0.36">돌아왔는데,</div>
   </div>
 
-  <!-- B 2.7–5.8: 초록 바탕 -->
   <div class="scene onG">
-    <div class="mid a" data-in="3.0" data-out="5.6">매일 3배로<br>움직이는 상품이</div>
-    <div class="num a" data-in="3.5" data-out="5.65" id="bignum" style="font-size:250px;margin:64px 0 54px -8px">0.0%</div>
-    <div class="mid a" data-in="4.7" data-out="5.7">줄어 있다면,</div>
+    <div class="mid a" data-s="B" data-at="0.03">매일 3배로<br>움직이는 상품은</div>
+    <div class="num a" data-s="B" data-at="0.3" id="bignum" style="font-size:250px;margin:64px 0 54px -8px">0.0%</div>
+    <div class="mid a" data-s="B" data-at="0.62">줄어 있다면,</div>
   </div>
 
-  <!-- C 5.8–8.8 -->
   <div class="scene">
-    <div class="big a" data-in="6.1" data-out="8.55" style="font-size:112px">보수 때문이</div>
-    <div class="big a" data-in="6.35" data-out="8.6" style="font-size:112px">아니라</div>
-    <div class="big a" data-in="6.9" data-out="8.65" style="font-size:112px"><span class="mk" id="mk1">산수</span>가 그렇게</div>
-    <div class="big a" data-in="7.15" data-out="8.7" style="font-size:112px">나옵니다.</div>
+    <div class="big a" data-s="C" data-at="0.02" style="font-size:108px">수수료로<br>떼인 게 아닙니다.</div>
+    <div class="mid a" data-s="C" data-at="0.4" style="margin-top:72px">빠진 뒤에는<br><span class="mk" id="mk1">줄어든 금액</span>에서<br>다시 오르기 때문입니다.</div>
   </div>
 
-  <!-- D 8.8–13.8: 하루 빠지고 다음 날 되찾기 -->
   <div class="scene">
-    <div class="cap a" data-in="9.0" data-out="11.0">하루 3% 빠지고</div>
-    <div class="cap a" data-in="11.2" data-out="13.6" style="position:absolute;top:0;left:0">다음 날 그만큼 되찾으면</div>
+    <div class="cap a" data-s="D" data-at="0.02" data-until="0.3">하루 3% 빠졌다가</div>
+    <div class="cap a" data-s="D" data-at="0.32" style="position:absolute;top:0;left:0">다음 날 제자리로 돌아와도</div>
     <div style="margin-top:56px">
-      <div class="panel a" data-in="9.2" data-out="13.65"><div class="lab">지수</div><div class="num" id="d1">100</div></div>
-      <div class="panel a" data-in="9.35" data-out="13.7" id="p2"><div class="lab">3배로 움직이는<br>상품</div><div class="num" id="d2">100</div></div>
+      <div class="panel a" data-s="D" data-at="0.04"><div class="lab">지수</div><div class="num" id="d1">100</div></div>
+      <div class="panel a" data-s="D" data-at="0.07" id="p2"><div class="lab">3배로 움직이는<br>상품</div><div class="num" id="d2">100</div></div>
     </div>
-    <div class="cap a" data-in="12.5" data-out="13.7" style="margin-top:52px;font-size:68px">3배 상품은 제자리에<br><span class="mk" id="mk2">못 미칩니다.</span></div>
+    <div class="cap a" data-s="D" data-at="0.7" style="margin-top:52px;font-size:68px">3배 상품은 91에서 올라<br><span class="mk" id="mk2">99.4까지만</span> 돌아옵니다.</div>
   </div>
 
-  <!-- E 13.8–18.8: 20번 되풀이 -->
   <div class="scene">
-    <div class="cap a" data-in="14.0" data-out="18.55">이걸 <span id="cnt">20</span>번 되풀이하면</div>
-    <div class="dots a" data-in="14.2" data-out="18.6" id="dots"></div>
+    <div class="cap a" data-s="E" data-at="0.02">이게 20번 되풀이되면</div>
+    <div class="dots a" data-s="E" data-at="0.06" id="dots"></div>
     <div style="margin-top:52px">
-      <div class="panel a" data-in="14.3" data-out="18.65"><div class="lab">지수</div><div class="num">100</div></div>
-      <div class="panel hot a" data-in="14.4" data-out="18.7"><div class="lab">3배로 움직이는<br>상품</div><div class="num" id="e2">100.0</div></div>
+      <div class="panel a" data-s="E" data-at="0.08"><div class="lab">지수</div><div class="num">100</div></div>
+      <div class="panel hot a" data-s="E" data-at="0.1"><div class="lab">3배로 움직이는<br>상품</div><div class="num" id="e2">100.0</div></div>
     </div>
-    <div class="a" data-in="17.5" data-out="18.7"><div class="tag num" style="font-size:84px">−10.6%</div></div>
+    <div class="a" data-s="E" data-at="0.72"><div class="tag num" style="font-size:84px">−10.6%</div></div>
   </div>
 
-  <!-- F 18.8–22.2 -->
   <div class="scene">
-    <div class="mid a" data-in="19.0" data-out="22.0">오르내림이 잦은<br>장에서는 <span class="mk" id="mk3">깎이고,</span></div>
-    <div class="mid a" data-in="20.4" data-out="22.05" style="margin-top:70px">한쪽으로 쭉 가는<br>장에서는 불어납니다.</div>
+    <div class="mid a" data-s="F" data-at="0.02">자주 오르내리는<br>장에서는 <span class="mk" id="mk3">깎이고,</span></div>
+    <div class="mid a" data-s="F" data-at="0.48" style="margin-top:70px">꾸준히 오르는<br>장에서는 3배보다<br>더 많이 오릅니다.</div>
   </div>
 
-  <!-- G 22.2–25.5 -->
   <div class="end">
-    <svg class="a" data-in="22.4" viewBox="0 0 100 100" id="mark" style="width:230px;height:230px;display:block"><rect width="100" height="100" rx="26" fill="#0E9F7B"/><path fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" d="M24 52 L39 67 L66 33"/><circle cx="77" cy="66" r="6.5" fill="#fff"/></svg>
-    <div class="wm a" data-in="23.0" style="margin-top:44px">checksum<i>.</i></div>
-    <div class="small a" data-in="23.3" style="margin-top:56px;color:var(--ink)">계산 예시입니다. 실제 상품에는<br>운용 보수와 추적 오차가 더해집니다.</div>
-    <div class="small a" data-in="23.5" style="margin-top:36px">원금 손실 가능 · 개별 상담 불가</div>
+    <svg class="a" data-s="G" data-at="0.04" viewBox="0 0 100 100" id="mark" style="width:230px;height:230px;display:block"><rect width="100" height="100" rx="26" fill="#0E9F7B"/><path fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" d="M24 52 L39 67 L66 33"/><circle cx="77" cy="66" r="6.5" fill="#fff"/></svg>
+    <div class="wm a" data-s="G" data-at="0.18" style="margin-top:44px">checksum<i>.</i></div>
+    <div class="small a" data-s="G" data-at="0.26" style="margin-top:56px;color:var(--ink)">계산 예시입니다. 실제 상품에는<br>운용 보수와 추적 오차가 더해집니다.</div>
+    <div class="small a" data-s="G" data-at="0.32" style="margin-top:36px">원금 손실 가능 · 개별 상담 불가<span id="aivoice"><br>목소리는 AI 음성입니다</span></div>
   </div>
 </div>
 <script>
+// 장면이 시작하는 시각(초). 목소리의 시각표가 있으면 그것을 쓴다.
+const S = Object.assign({ A: 0, B: 2.7, C: 5.8, D: 10.4, E: 16.4, F: 21.6, G: 26.4, END: 29.6 }, (window.TIMING || {}).scenes || {});
+const ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'END'];
+const next = k => S[ORDER[ORDER.indexOf(k) + 1]];
+const at = (k, f) => S[k] + (next(k) - S[k]) * f;          // 장면 k 안의 자리 f(0~1) → 시각
+window.DURATION = S.END;
+if (window.TIMING) document.getElementById('aivoice').style.display = 'inline';
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const eo = x => 1 - Math.pow(1 - x, 3);
 const eio = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 const $ = id => document.getElementById(id);
 const dots = $('dots');
 for (let i = 0; i < 20; i++) dots.appendChild(document.createElement('i'));
-const els = [...document.querySelectorAll('.a')].map(el => ({ el, tin: +el.dataset.in, tout: el.dataset.out ? +el.dataset.out : null }));
-const K = 0.91 * (0.03 / 0.97 * 3 + 1);   // 3배 상품이 한 바퀴 돌고 난 값 = 0.994433
+const els = [...document.querySelectorAll('.a')].map((el, i) => {
+  const k = el.dataset.s;
+  const tout = k === 'G' ? null : (el.dataset.until ? at(k, +el.dataset.until) : next(k) - 0.26 + (i % 4) * 0.03);
+  return { el, tin: at(k, +el.dataset.at), tout };
+});
+const K = 0.91 * (0.03 / 0.97 * 3 + 1);   // 3배 상품이 한 번 빠졌다 돌아온 뒤의 값 = 0.994433
 function render(t) {
   for (const { el, tin, tout } of els) {
     const a = eo(clamp((t - tin) / 0.42)), b = tout == null ? 0 : eio(clamp((t - tout) / 0.22));
     el.style.opacity = a * (1 - b);
     el.style.transform = `translateY(${(1 - a) * 46 - b * 26}px)`;
   }
-  // 바탕: 2.7초에 초록이 퍼졌다가 5.75초에 걷힌다
-  const w = eio(clamp((t - 2.7) / 0.5)) * (1 - eio(clamp((t - 5.75) / 0.4)));
+  // 장면 B 동안 바탕이 초록으로
+  const w = eio(clamp((t - S.B) / 0.5)) * (1 - eio(clamp((t - (S.C - 0.12)) / 0.4)));
   $('wash').style.transform = `scale(${w * 120})`;
   const g = w > 0.5;
   $('deco').style.color = g ? '#fff' : ''; $('dwm').querySelector('i').style.color = g ? '#fff' : '';
-  $('dwm').style.opacity = 0.9 * (1 - eo(clamp((t - 22.0) / 0.3)));
+  $('dwm').style.opacity = 0.9 * (1 - eo(clamp((t - (S.G - 0.3)) / 0.3)));
+  $('kick').style.opacity = 1 - eo(clamp((t - (S.G - 0.3)) / 0.3));
   $('kbg').setAttribute('fill', g ? '#fff' : '#0E9F7B');
   $('kfg').setAttribute('stroke', g ? '#0E9F7B' : '#fff'); $('kdot').setAttribute('fill', g ? '#0E9F7B' : '#fff');
-  // B: 0.0 → −10.6
-  const v = eo(clamp((t - 3.6) / 1.1)) * 10.6;
-  $('bignum').textContent = v.toFixed(1) + '%';
+  // B: 0.0 → 10.6
+  $('bignum').textContent = (eo(clamp((t - at('B', 0.3)) / 1.0)) * 10.6).toFixed(1) + '%';
   // 형광펜
-  for (const [id, t0] of [['mk1', 7.35], ['mk2', 12.9], ['mk3', 19.6]])
+  for (const [id, t0] of [['mk1', at('C', 0.55)], ['mk2', at('D', 0.8)], ['mk3', at('F', 0.26)]])
     $(id).style.backgroundSize = eo(clamp((t - t0) / 0.45)) * 100 + '% 100%';
-  // D: 100 → 97 → 100 / 100 → 91 → 99.4
-  const down = eio(clamp((t - 9.7) / 0.8)), up = eio(clamp((t - 11.6) / 0.8));
+  // D: 지수 100 → 97 → 100 / 3배 상품 100 → 91 → 99.4
+  const down = eio(clamp((t - at('D', 0.1)) / 0.8)), up = eio(clamp((t - at('D', 0.4)) / 0.8));
   const i1 = 100 - 3 * down + 3 * up, i2 = 100 - 9 * down + (100 * K - 91) * up;
-  $('d1').textContent = up > 0 || down < 1 ? (Math.abs(i1 - Math.round(i1)) < 0.05 ? Math.round(i1) : i1.toFixed(1)) : '97';
-  $('d2').textContent = up >= 1 ? '99.4' : (down < 1 || up > 0 ? (Math.abs(i2 - Math.round(i2)) < 0.05 ? Math.round(i2) : i2.toFixed(1)) : '91');
+  const show = v => Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : v.toFixed(1);
+  $('d1').textContent = show(i1);
+  $('d2').textContent = up >= 1 ? '99.4' : show(i2);
   $('p2').classList.toggle('hot', up >= 1);
   // E: 20번
-  const k = Math.round(clamp((t - 14.8) / 2.5) * 20);
+  const k = Math.round(clamp((t - at('E', 0.14)) / ((next('E') - S.E) * 0.52)) * 20);
   [...dots.children].forEach((d, i) => d.classList.toggle('on', i < k));
   $('e2').textContent = (100 * Math.pow(K, k)).toFixed(1);
-  $('cnt').textContent = 20;
   // G: 체크가 그려진다
-  const p = eo(clamp((t - 22.6) / 0.5));
-  document.querySelector('#mark path').style.strokeDashoffset = 70 * (1 - p);
-  document.querySelector('#mark circle').style.transform = `scale(${eo(clamp((t - 23.0) / 0.25))})`;
+  document.querySelector('#mark path').style.strokeDashoffset = 70 * (1 - eo(clamp((t - (S.G + 0.25)) / 0.5)));
+  document.querySelector('#mark circle').style.transform = `scale(${eo(clamp((t - (S.G + 0.65)) / 0.25))})`;
 }
 window.render = render; render(0);
 </script>

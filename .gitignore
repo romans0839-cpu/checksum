@@ -27,3 +27,6 @@ docs/*.pdf
 node_modules
 package-lock.json
 assets/cards/package.json
+
+# 음성 모델 (타이포 영상을 만들 때 깃허브 배포 파일에서 받는다)
+assets/video/.models
