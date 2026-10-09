@@ -109,7 +109,7 @@ html, body { background:#000; }
 </div>
 <script>
 // 장면이 시작하는 시각(초). 목소리의 시각표가 있으면 그것을 쓴다.
-const S = Object.assign({ A: 0, B: 2.7, C: 5.8, D: 10.4, E: 16.4, F: 21.6, G: 26.4, END: 29.6 }, (window.TIMING || {}).scenes || {});
+const S = Object.assign({ A: 0, B: 2.7, C: 5.9, D: 10.9, E: 17.9, F: 23.3, G: 28.9, END: 32.1 }, (window.TIMING || {}).scenes || {});
 const ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'END'];
 const next = k => S[ORDER[ORDER.indexOf(k) + 1]];
 const at = (k, f) => S[k] + (next(k) - S[k]) * f;          // 장면 k 안의 자리 f(0~1) → 시각

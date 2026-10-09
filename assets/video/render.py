@@ -1,8 +1,9 @@
 """타이포 영상 만들기: 시간에 따라 그림이 정해지는 HTML(render(t) 함수가 있는 것) → 1080×1920 MP4.
 
-    python assets/video/render.py assets/video/leverage_math.html                 # 소리 없는 판 (HTML 의 기본 시각)
-    python assets/video/render.py assets/video/leverage_math.html --voice         # 목소리를 얹은 판: samples/<이름>.voice.flac 와 .timing.json 을 쓴다
-    python assets/video/render.py assets/video/leverage_math.html --voice --stills 1.5,4.6,12.6   # 장면 확인용 그림만
+    python assets/video/render.py assets/video/leverage_math.html                 # 소리 없는 판 (기본 — 스레드 · X · 인스타, D38)
+    python assets/video/render.py assets/video/leverage_math.html --audio assets/video/music/<곡>.mp3 --out assets/video/samples/leverage_math_yt.mp4   # 음악을 얹은 판 (유튜브에만)
+    python assets/video/render.py assets/video/leverage_math.html --stills 1.5,4.6,12.6   # 장면 확인용 그림만
+    python assets/video/render.py assets/video/leverage_math.html --voice         # (쓰지 않는다, D38) 목소리를 얹은 판: samples/<이름>.voice.flac 와 .timing.json
 
 - 브라우저로 한 장씩 찍어 ffmpeg 로 묶는다(H.264, 30fps, moov 를 앞에 — 인스타·스레드 API 가 요구한다).
 - 길이는 HTML 이 정한다(window.DURATION). 목소리의 시각표(voice.py 가 만든 .timing.json)를 주면 장면이 말에 맞춰진다.
@@ -65,6 +66,8 @@ def main():
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", str(a.fps), "-c:v", "mjpeg", "-i", "-"]
         if audio:
             cmd += ["-i", audio, "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-t", f"{seconds:.3f}"]
+            if not a.voice:  # 음악: 처음과 끝을 부드럽게
+                cmd += ["-af", f"afade=t=in:d=0.3,afade=t=out:st={max(seconds - 1.5, 0):.3f}:d=1.5"]
         cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(a.fps), "-movflags", "+faststart", out]
         ff = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         n = int(round(seconds * a.fps))
@@ -74,7 +77,7 @@ def main():
         ff.stdin.close()
         ff.wait()
         b.close()
-    print(f"만듦 {out} ({n}장, {seconds:.1f}초{", 목소리 얹음" if audio else ""})")
+    print(f"만듦 {out} ({n}장, {seconds:.1f}초{", 소리 얹음" if audio else ""})")
     return ff.returncode
 
 
