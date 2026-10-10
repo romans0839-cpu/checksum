@@ -22,6 +22,7 @@
 | 지표 데이터 수집 (통계기관 API → DB → 사실 묶음). **서버에서 돈다** | `docs/13_indicator_data.md`, `pipeline/collect/`, `pipeline/console/jobs.py`(예약 작업 일꾼, docs/15 §5-2), `scripts/server_cron.sh`, `.env.example` |
 | **표현 방식** (줄바꿈 · 카드 · 타이포 영상(목소리 없음, D38) · 캐릭터, D35) | `docs/16_expression_formats.md`, `docs/research/`, `assets/cards/`, `assets/video/`, `assets/character/` |
 | **포지션과 해자 다시 정의** (제안 단계, 10/10) | `docs/17_position_moat.md`, `docs/research/2026-10-10_position_landscape.md` |
+| **가격 적정성과 광고 수주 검토** (제안 단계, 10/10 — 1차 목표 월 순수익 1,000만원) | `docs/19_pricing_and_ads_review.md`, `docs/research/2026-10-10_pricing_ads_research.md`, `scripts/pricing_review.py` |
 | 말투와 감정 규칙 | `templates/voice_guide.md` (표본은 `data/private/voice/`) |
 | SNS 글의 컨셉과 카피 원칙 (D27) | `docs/05_marketing_strategy.md` §0 · `templates/copy_guide.md` · `templates/avoid_terms.txt` |
 | 규제에서 지킬 것 | `docs/03_regulation_checklist.md`, `templates/banned_terms.txt`, `templates/disclaimer.md` |

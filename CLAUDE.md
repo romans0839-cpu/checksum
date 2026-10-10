@@ -59,6 +59,7 @@ python scripts/revenue_sim.py                       # 수익 시뮬레이션
 python assets/cards/render.py assets/cards/specs/<이름>.json        # 카드 이미지 (글자 검사 → PNG. 브라우저가 있는 곳에서)
 python assets/video/render.py assets/video/<이름>.html               # 타이포 영상 MP4 (소리 없음). 유튜브용은 --audio assets/video/music/<곡>.mp3 --out …_yt.mp4
 python scripts/path_to_100m.py                      # D10 목표 경로 (36·60개월)
+python scripts/pricing_review.py                    # 가격 · 광고 검토의 계산 (docs/19의 표 — 1차 목표 월 순수익 1,000만원)
 python -m pipeline.track_record.stats --since 2026-10-06   # 공개용 시그널 통계
 python -m pipeline.publish.lint data/newsletters/drafts/<file>.md   # 발행 전 검사
 python -m pipeline.ledger.commit                    # 이번 주 신호 장부 봉인 (ledger_commit.bat)
@@ -87,7 +88,7 @@ python -m pipeline.forecast.score                   # 봉인된 예측 채점
 
 ## 폴더
 - `claude-project/` Claude 프로젝트용 시스템 프롬프트와 지식 업로드 파일. docs/가 바뀌면 00_context_brief.md도 갱신
-- `docs/` 조사·사업계획·규제·재무·마케팅·전략(09)·데이터 라이선스(10)·콘텐츠 시스템 구조(11)·두 엔진 예측(12)·지표 데이터 수집(13)·콘텐츠 구조(14)·PC 없이 도는 운영(15)·표현 방식(16 — 줄바꿈·카드·타이포 영상·캐릭터, D35 · 채널별 형식 D36)·포지션과 해자(17 — 다섯 종목, D37)·개인별 종목 카드의 구조(18 — 제안) (참조용, 큰 변경은 새 버전 번호). `docs/research/`는 조사 전문
+- `docs/` 조사·사업계획·규제·재무·마케팅·전략(09)·데이터 라이선스(10)·콘텐츠 시스템 구조(11)·두 엔진 예측(12)·지표 데이터 수집(13)·콘텐츠 구조(14)·PC 없이 도는 운영(15)·표현 방식(16 — 줄바꿈·카드·타이포 영상·캐릭터, D35 · 채널별 형식 D36)·포지션과 해자(17 — 다섯 종목, D37)·개인별 종목 카드의 구조(18 — 제안)·가격 적정성과 광고 수주 검토(19 — 제안) (참조용, 큰 변경은 새 버전 번호). `docs/research/`는 조사 전문
 - `plan/` 로드맵·의사결정 (매주 갱신)
 - `pipeline/` 시그널 수집 → 통계 → 콘텐츠 생성 → 발행
 - `templates/` 뉴스레터 템플릿(화요일 메일의 1차 템플릿은 `mail_tuesday_sample_v1.html`, D43), 소식 표시의 기준(news_labels), disclaimer, 금지어, 말투 지침(voice_guide), 카피 원칙(copy_guide), 쓰지 않는 말(avoid_terms)
